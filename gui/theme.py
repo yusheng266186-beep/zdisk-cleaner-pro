@@ -13,24 +13,32 @@ import tkinter.font as tkfont
 # 配色
 # ---------------------------------------------------------------------------
 C = {
-    'bg':          '#f2f5fa',   # 主背景 浅蓝灰
-    'sidebar':     '#ffffff',   # 侧栏 纯白
-    'card':        '#ffffff',   # 卡片 白
-    'card2':       '#f0f3f9',   # 次级面 (输入/分段底)
-    'card_hover':  '#e9eef7',   # 悬停
-    'border':      '#dfe5ef',   # 边框
-    'border_soft': '#e8edf5',
-    'text':        '#1b2434',   # 主文字
-    'text_dim':    '#4d5a70',   # 次级文字
-    'text_faint':  '#7d8899',   # 弱文字
-    'accent':      '#2f6bff',   # 品牌蓝
-    'accent2':     '#6a4df6',   # 渐变副色
-    'accent_soft': '#e8efff',
-    'green':       '#0f9d58',
-    'yellow':      '#b45309',
-    'red':         '#dc2626',
-    'sidebar_sel': '#e8efff',   # 侧栏选中
+    'bg':          '#0d1017',   # 主背景
+    'sidebar':     '#11141c',   # 侧栏
+    'card':        '#161a24',   # 卡片
+    'card2':       '#1a1f2b',   # 次级面
+    'card_hover':  '#1d2331',   # 悬停
+    'border':      '#232937',   # 边框
+    'border_soft': '#1c2230',
+    'text':        '#edf0f6',   # 主文字 (高对比)
+    'text_dim':    '#b7c1d3',   # 次级文字 (高对比)
+    'text_faint':  '#98a2b8',   # 弱文字 (高对比)
+    'accent':      '#4f8cff',   # 主色
+    'accent2':     '#7c5cff',   # 渐变副色
+    'accent_soft': '#182436',
+    'green':       '#3dd68c',
+    'yellow':      '#ffb454',
+    'red':         '#ff5c69',
+    'sidebar_sel': '#1d2536',   # 侧栏选中
 }
+
+# 近似透明混合的实体色
+C['green_soft'] = '#12291f'
+C['yellow_soft'] = '#2b2314'
+C['red_soft'] = '#2b181c'
+C['track'] = '#232a3a'        # 进度条/仪表轨道
+C['toggle_off'] = '#2a3143'   # 开关未启用
+C['scrollbar'] = '#2c3447'    # 滚动条
 
 # 近似透明混合的实体色
 C['green_soft'] = '#e2f5ea'
@@ -161,8 +169,8 @@ def apply_window_chrome(root, bg_hex=C['sidebar'], fg_hex=C['text']):
         hwnd = ctypes.windll.user32.GetParent(root.winfo_id())
         if not hwnd:
             hwnd = root.winfo_id()
-        # 浅色主题: 明确关闭沉浸式深色标题栏
-        val = ctypes.c_int(0)
+        # 深色主题: 启用沉浸式深色标题栏
+        val = ctypes.c_int(1)
         ok = False
         for attr in (20, 19):
             if ctypes.windll.dwmapi.DwmSetWindowAttribute(

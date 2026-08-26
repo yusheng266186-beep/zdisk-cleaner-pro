@@ -537,7 +537,7 @@ class CleanPage:
         r = px(9)
         box_bg = lerp_color(C['card2'], C['accent'], ct)
         cv.create_oval(cx - r, cy - r, cx + r, cy + r, fill=box_bg,
-                       outline=lerp_color(C['border'], C['accent'], ct), width=1.6)
+                       outline=lerp_color('#39415a', C['accent'], ct), width=1.6)
         if ct > 0.05:
             s = ease_out_cubic(ct)
             cv.create_line(cx - 4.5 * s, cy, cx - 1.5 * s, cy + 3.5 * s,

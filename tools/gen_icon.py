@@ -15,12 +15,11 @@ def lerp(a, b, t):
     return tuple(int(a[i] + (b[i] - a[i]) * t) for i in range(3))
 
 
-BLUE = (47, 107, 255)
-PURPLE = (106, 77, 246)
-GREEN = (15, 157, 88)
-BG_TOP = (255, 255, 255)
-BG_BOT = (219, 231, 250)
-BORDER = (185, 200, 228)
+BLUE = (79, 140, 255)
+PURPLE = (124, 92, 255)
+GREEN = (61, 214, 140)
+BG_TOP = (26, 31, 43)
+BG_BOT = (13, 16, 23)
 
 
 def render(size):
@@ -52,13 +51,12 @@ def render(size):
             a_bg = smooth(1.2 * SS, -1.2 * SS, sdf)
             if a_bg <= 0:
                 continue
-            # 背景垂直渐变
+            # 背景垂直渐变 + 顶部微高光
             g = lerp(BG_TOP, BG_BOT, fy / S)
-            r_, g_, b_ = g
-            # 圆角描边 (浅色图标在白底桌面上需要轮廓)
-            edge = smooth(1.6 * SS, 0.0, abs(sdf))
-            border_mix = lerp(g, BORDER, edge * 0.9)
-            r_, g_, b_ = border_mix
+            hl = max(0.0, 1.0 - fy / (S * 0.28)) * 0.06
+            r_, g_, b_ = (g[0] + 255 * hl * 0.3,
+                          g[1] + 255 * hl * 0.35,
+                          g[2] + 255 * hl * 0.5)
 
             # ---- 圆环: 渐变弧 300°, 缺口朝右上 ----
             dx, dy = fx - half, fy - half

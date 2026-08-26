@@ -17,11 +17,11 @@ from .theme import (C, px, round_rect, lerp_color, ease_out_cubic, ease_out_back
 # ---------------------------------------------------------------------------
 class Btn(tk.Canvas):
     STYLES = {
-        'primary': dict(fg='#ffffff', bg1='#2f6bff', bg2='#6a4df6', border=None),
+        'primary': dict(fg='#ffffff', bg1='#4f8cff', bg2='#7c5cff', border=None),
         'ghost':   dict(fg=C['text'], bg1=C['card2'], bg2=C['card_hover'], border=C['border']),
-        'soft':    dict(fg='#2f6bff', bg1=C['accent_soft'], bg2='#dbe7ff', border=None),
-        'danger':  dict(fg='#ffffff', bg1='#dc2626', bg2='#ef4444', border=None),
-        'green':   dict(fg='#ffffff', bg1='#0f9d58', bg2='#16b364', border=None),
+        'soft':    dict(fg='#6da4ff', bg1=C['accent_soft'], bg2='#1e2c47', border=None),
+        'danger':  dict(fg='#ffffff', bg1='#e5484d', bg2='#ff5c69', border=None),
+        'green':   dict(fg='#06251a', bg1='#3dd68c', bg2='#5ce4a4', border=None),
     }
 
     def __init__(self, master, text, command=None, style='primary',
@@ -84,9 +84,8 @@ class Btn(tk.Canvas):
         except Exception:
             return
         max_r = max(self.cw, self.ch) * 0.75
-        ring_c = '#ffffff' if self.st['fg'] == '#ffffff' else '#000000'
         rid = self.create_oval(x - 2, y - 2, x + 2, y + 2,
-                               outline=ring_c, width=2)
+                               outline='#ffffff', width=2)
         t0 = time.perf_counter()
         dur = 380
 
@@ -99,8 +98,7 @@ class Btn(tk.Canvas):
                     pass
                 return
             r = 2 + (max_r - 2) * ease_out_cubic(t)
-            base_ring = '#ffffff' if self.st['fg'] == '#ffffff' else '#000000'
-            col = lerp_color(base_ring, bg_now, ease_out_cubic(t))
+            col = lerp_color('#ffffff', bg_now, ease_out_cubic(t))
             self.itemconfig(rid, outline=col,
                             width=max(0.5, 2.2 * (1 - t)))
             self.coords(rid, x - r, y - r, x + r, y + r)
@@ -131,10 +129,9 @@ class Btn(tk.Canvas):
             bg = lerp_color(bg, '#000000', 0.18)
         r = self._radius * (1 - press * 0.06)
         round_rect(self, 1, 1, self.cw - 1, self.ch - 1, r, fill=bg, outline='')
-        # 顶部高光/阴影线, 增强立体感 (深色按钮高光, 浅色按钮微阴影)
-        hi = '#ffffff' if self.st['fg'] == '#ffffff' else '#000000'
+        # 顶部高光, 增强立体感
         self.create_line(px(10), 2.5, self.cw - px(10), 2.5,
-                         fill=lerp_color(bg, hi, 0.35), width=1)
+                         fill=lerp_color('#ffffff', bg, 0.65), width=1)
         off = 1 if press else 0
         self.create_text(self.cw // 2 + off, self.ch // 2 + off,
                          text=self.text, font=self.font, fill=self.st['fg'])
