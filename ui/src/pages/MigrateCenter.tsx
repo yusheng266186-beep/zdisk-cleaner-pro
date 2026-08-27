@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
     ArrowLeft,
     ArrowRight,
@@ -30,6 +30,8 @@ const msgOf = (e: unknown): string => (e instanceof Error ? e.message : String(e
 
 export function MigrateCenter() {
     const toast = useStore((s) => s.toast);
+    // 雷达页「作为迁移源」跨页联动：暂存路径非空则预填源目录
+    const pendingSrc = useStore((s) => s.pendingMigrateSrc);
 
     const [step, setStep] = useState<Step>("form");
     const [src, setSrc] = useState("");
@@ -44,6 +46,11 @@ export function MigrateCenter() {
     const [undoing, setUndoing] = useState(false);
     const [undoMsg, setUndoMsg] = useState<string | null>(null);
 
+    useEffect(() => {
+        if (!pendingSrc) return;
+        setSrc(pendingSrc);
+    }, [pendingSrc]);
+
     async function makePlan() {
         if (planning) return;
         if (!src.trim() || !dstRoot.trim()) {
@@ -55,6 +62,7 @@ export function MigrateCenter() {
             const p = await ipc.planMigration(src.trim(), dstRoot.trim());
             setPlan(p);
             setStep("plan");
+            useStore.getState().setPendingMigrateSrc(null); // 计划已成，联动暂存即消费
         } catch (e) {
             toast("err", `无法生成迁移计划：${msgOf(e)}`);
         } finally {

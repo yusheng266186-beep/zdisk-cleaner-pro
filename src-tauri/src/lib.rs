@@ -6,6 +6,7 @@
 //! 与 `cargo test`（default-members 仅纯内核 crate）隔离。
 
 use std::path::Path;
+use std::process::Command;
 use std::sync::{OnceLock};
 use std::os::windows::ffi::OsStrExt;
 
@@ -43,7 +44,8 @@ pub fn run() {
             startup_enable_all,
             migrate_plan,
             migrate_apply,
-            migrate_undo
+            migrate_undo,
+            reveal_in_explorer
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -309,4 +311,20 @@ fn migrate_apply(app: tauri::AppHandle, src: String, dst_root: String) -> Result
 #[tauri::command]
 fn migrate_undo(src: String) -> Result<String, String> {
     migrate::undo(Path::new(&src))
+}
+
+/* ── 空间雷达实用动作 ───────────────────────────────────── */
+
+/// 在资源管理器中打开指定目录。仅校验存在性后拉起 explorer，
+/// 进程句柄即弃（explorer 会转交已有窗口实例，退出码无意义）。
+#[tauri::command]
+fn reveal_in_explorer(path: String) -> Result<(), String> {
+    if !Path::new(&path).exists() {
+        return Err(format!("路径不存在：{path}"));
+    }
+    Command::new("explorer.exe")
+        .arg(&path)
+        .spawn()
+        .map_err(|e| format!("无法启动资源管理器：{e}"))?;
+    Ok(())
 }

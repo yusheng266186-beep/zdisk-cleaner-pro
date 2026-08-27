@@ -9,6 +9,8 @@ import type { TreeNode } from "../lib/tree";
 
 interface Props {
     node: TreeNode;
+    /** 选中节点回调：点击叶子块或 shift+点击任意块触发；普通左键仍走下钻 */
+    onSelectNode?: (node: TreeNode) => void;
 }
 
 const GAP = 1; // 色块缝隙（渲染时两侧各收 GAP/2）
@@ -115,7 +117,7 @@ export function squarify(children: TreeNode[], frame: Rect, basePct: number): Ti
     return tiles;
 }
 
-export function TreemapCanvas({ node }: Props) {
+export function TreemapCanvas({ node, onSelectNode }: Props) {
     // 缩放栈：栈底 = 传入根，栈顶 = 当前展示层
     const [zoomStack, setZoomStack] = useState<TreeNode[]>([node]);
     useEffect(() => setZoomStack([node]), [node]);
@@ -147,6 +149,15 @@ export function TreemapCanvas({ node }: Props) {
     const drill = (child: TreeNode) => {
         if (child.children.length === 0) return;
         setZoomStack((s) => [...s, child]);
+    };
+
+    /** 点击分发：叶子或 shift+点击 → 选中回调；其余普通左键保持下钻 */
+    const handleTileClick = (n: TreeNode, ev: React.MouseEvent) => {
+        if (ev.shiftKey || n.children.length === 0) {
+            onSelectNode?.(n);
+            return;
+        }
+        drill(n);
     };
 
     return (
@@ -206,7 +217,7 @@ export function TreemapCanvas({ node }: Props) {
                                 boxShadow: hovered ? "inset 0 0 0 2px var(--zc-accent-b)" : undefined,
                                 cursor: t.node.children.length > 0 ? "pointer" : "default",
                             }}
-                            onClick={() => drill(t.node)}
+                            onClick={(e) => handleTileClick(t.node, e)}
                             onMouseEnter={() => setHoveredKey(key)}
                             onMouseLeave={() => setHoveredKey((p) => (p === key ? null : p))}
                         >

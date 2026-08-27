@@ -160,6 +160,13 @@ export async function analyzeTree(path = "", depth = 4): Promise<TreeNode> {
     return invoke<TreeNode>("analyze_tree", { path, depth });
 }
 
+/** 在资源管理器中打开目录。浏览器开发态无壳可调，直接 resolve。 */
+export async function revealInExplorer(path: string): Promise<void> {
+    if (!isDesktop()) return;
+    const { invoke } = await import("@tauri-apps/api/core");
+    await invoke("reveal_in_explorer", { path });
+}
+
 /* ── 启动项管家 ───────────────────────────────────────── */
 
 export interface StartupEntry {

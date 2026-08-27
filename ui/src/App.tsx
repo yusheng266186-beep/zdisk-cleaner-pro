@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { AnimatePresence, MotionConfig, motion } from "motion/react";
 import { HeartPulse, Wrench, History, Settings, Command, Radar, Rocket, FolderOutput } from "lucide-react";
 import { Home } from "./pages/Home";
@@ -13,9 +13,7 @@ import { CleaningOverlay } from "./pages/CleaningOverlay";
 import { ToastStack } from "./components/ToastStack";
 import { CommandPalette } from "./components/CommandPalette";
 import { springSnappy } from "./lib/motion";
-import { useStore } from "./store";
-
-type Page = "home" | "results" | "history" | "tools" | "startup" | "migrate" | "radar" | "settings";
+import { useStore, type Page } from "./store";
 
 const NAV: { id: Page; label: string; icon: typeof HeartPulse }[] = [
     { id: "home", label: "体检台", icon: HeartPulse },
@@ -30,13 +28,15 @@ const NAV: { id: Page; label: string; icon: typeof HeartPulse }[] = [
 export default function App() {
     const version = useStore((s) => s.version);
     const init = useStore((s) => s.init);
-    const [page, setPage] = useState<Page>("home");
+    // 页面路由提升进 store：雷达页「作为迁移源」等跨页跳转可复用 setActivePage
+    const page = useStore((s) => s.activePage);
+    const setPage = useStore((s) => s.setActivePage);
 
     useEffect(() => {
         void init();
         // 扫描结束后自动进入结果页
         const unsub = useStore.subscribe((s, prev) => {
-            if (s.phase === "results" && prev?.phase !== "results") setPage("results");
+            if (s.phase === "results" && prev?.phase !== "results") s.setActivePage("results");
         });
         return unsub;
     }, [init]);

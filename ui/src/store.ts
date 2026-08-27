@@ -13,11 +13,15 @@ export interface Toast {
 
 export type Phase = "idle" | "scanning" | "results" | "cleaning";
 
+/** 侧栏导航页（自 App.tsx 提升进 store，供任意页面跨页跳转） */
+export type Page = "home" | "results" | "history" | "tools" | "startup" | "migrate" | "radar" | "settings";
+
 interface StoreState {
     demo: boolean;
     version: string;
     theme: "dark" | "light";
 
+    activePage: Page;
     phase: Phase;
     scanFiles: number;
     scanBytes: number;
@@ -35,7 +39,12 @@ interface StoreState {
     paletteOpen: boolean;
     toasts: Toast[];
 
+    /** 雷达页「作为迁移源」的暂存路径：非空时迁移中心表单预填 */
+    pendingMigrateSrc: string | null;
+
     init: () => Promise<void>;
+    setActivePage: (p: Page) => void;
+    setPendingMigrateSrc: (v: string | null) => void;
     toggleTheme: () => void;
     startScan: () => Promise<void>;
     cancelScan: () => void;
@@ -56,6 +65,7 @@ export const useStore = create<StoreState>((set, get) => ({
     version: "",
     theme: (localStorage.getItem("zc-theme") as "dark" | null) ?? "dark",
 
+    activePage: "home",
     phase: "idle",
     scanFiles: 0,
     scanBytes: 0,
@@ -72,6 +82,7 @@ export const useStore = create<StoreState>((set, get) => ({
 
     paletteOpen: false,
     toasts: [],
+    pendingMigrateSrc: null,
 
     async init() {
         document.documentElement.dataset.theme = get().theme;
@@ -175,6 +186,9 @@ export const useStore = create<StoreState>((set, get) => ({
         set({ cleanOutcome: null });
         get().toast("ok", msg);
     },
+
+    setActivePage: (p) => set({ activePage: p }),
+    setPendingMigrateSrc: (v) => set({ pendingMigrateSrc: v }),
 
     setExpanded: (id) => set({ expandedRule: id }),
     togglePalette: (open) => set((s) => ({ paletteOpen: open ?? !s.paletteOpen })),
