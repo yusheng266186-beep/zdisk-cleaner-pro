@@ -220,6 +220,28 @@ export interface MigrationPlan {
     total_files: number;
 }
 
+/** 内核迁移五阶段（snake_case，与 Rust 侧序列化名一致） */
+export type MigratePhaseKey = "copy" | "verify" | "link" | "smoke" | "cleanup";
+export type MigratePhaseEvent = { phase: MigratePhaseKey; state: "start" | "end" };
+
+type MigratePhaseCb = (p: MigratePhaseEvent) => void;
+let migratePhaseCb: MigratePhaseCb | null = null;
+
+/** 订阅内核真实阶段事件（migrate://phase，payload = [phase, state]）。
+ *  浏览器模式无内核，返回 noop unlisten —— 数据由 applyMigration 模拟推送。 */
+export async function onMigratePhase(cb: MigratePhaseCb): Promise<() => void> {
+    migratePhaseCb = cb;
+    if (!isDesktop()) return () => { migratePhaseCb = null; };
+    const { listen } = await import("@tauri-apps/api/event");
+    const unlisten = await listen<string[]>("migrate://phase", (ev) => {
+        cb({ phase: ev.payload[0] as MigratePhaseKey, state: ev.payload[1] as "start" | "end" });
+    });
+    return () => {
+        unlisten();
+        migratePhaseCb = null;
+    };
+}
+
 export async function planMigration(src: string, dstRoot: string): Promise<MigrationPlan> {
     if (!isDesktop()) {
         await wait(900);
@@ -237,7 +259,16 @@ export async function planMigration(src: string, dstRoot: string): Promise<Migra
 
 export async function applyMigration(src: string, dstRoot: string): Promise<string> {
     if (!isDesktop()) {
-        await wait(2600);
+        // 演示态：按内核真实事件流同构的相位序列走一段时间轴，
+        // 每个 Start/End 间隔 250ms 依次推给订阅者，最后 resolve。
+        const phases: MigratePhaseKey[] = ["copy", "verify", "link", "smoke", "cleanup"];
+        for (const phase of phases) {
+            await wait(250);
+            migratePhaseCb?.({ phase, state: "start" });
+            await wait(250);
+            migratePhaseCb?.({ phase, state: "end" });
+        }
+        await wait(250);
         return `demo-${Date.now().toString(36)}`;
     }
     const { invoke } = await import("@tauri-apps/api/core");

@@ -9,13 +9,22 @@ import {
 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { pageVariants, springSnappy } from "../lib/motion";
-import type { MigrationPlan } from "../lib/ipc";
+import type { MigrationPlan, MigratePhaseKey } from "../lib/ipc";
 import * as ipc from "../lib/ipc";
 import { humanSize } from "../lib/format";
 import { useStore } from "../store";
 
 /** 向导态机：form 填参数 → plan 审计划 → done 收结果 */
 type Step = "form" | "plan" | "done";
+
+/** 内核五阶段 → 当前阶段文案（与 zclean CLI 的 [n/5] 行一一对应） */
+const PHASE_LABEL: Record<MigratePhaseKey, string> = {
+    copy: "正在复制内容…",
+    verify: "尺寸校验中…",
+    link: "建立 junction 中…",
+    smoke: "冒烟验证中…",
+    cleanup: "清理备份中…",
+};
 
 const msgOf = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
@@ -29,6 +38,7 @@ export function MigrateCenter() {
     const [plan, setPlan] = useState<MigrationPlan | null>(null);
     const [planning, setPlanning] = useState(false);
     const [applying, setApplying] = useState(false);
+    const [currentPhaseLabel, setCurrentPhaseLabel] = useState<string | null>(null);
 
     const [resultId, setResultId] = useState<string | null>(null);
     const [undoing, setUndoing] = useState(false);
@@ -55,7 +65,11 @@ export function MigrateCenter() {
     async function applyNow() {
         if (applying || !plan) return;
         setApplying(true);
+        setCurrentPhaseLabel(null);
+        let unlisten: (() => void) | undefined;
         try {
+            // 先订阅内核真实阶段事件，再发起迁移 —— Start/End 推送驱动文案条
+            unlisten = await ipc.onMigratePhase((p) => setCurrentPhaseLabel(PHASE_LABEL[p.phase]));
             // 后端会以当前参数重新 plan 校验，防跨参数篡改
             const id = await ipc.applyMigration(src.trim(), dstRoot.trim());
             setResultId(id);
@@ -66,6 +80,8 @@ export function MigrateCenter() {
             // 内核失败即自动回滚，消息里带回滚结论
             toast("err", msgOf(e));
         } finally {
+            unlisten?.();
+            setCurrentPhaseLabel(null);
             setApplying(false);
         }
     }
@@ -200,6 +216,34 @@ export function MigrateCenter() {
                                 <ArrowLeft size={13} /> 返回修改
                             </button>
                         </div>
+
+                        {/* 执行等待区：内核真实阶段推送（非估算进度） */}
+                        {applying && (
+                            <div
+                                className="mt-4 flex items-center gap-2.5 rounded-lg border px-3 py-2.5 text-xs"
+                                style={{ background: "var(--zc-surface-2)", borderColor: "var(--zc-border-strong)" }}
+                            >
+                                <motion.span
+                                    aria-hidden
+                                    animate={{ opacity: [1, 0.2, 1] }}
+                                    transition={{ repeat: Infinity, duration: 1.5, ease: "easeInOut" }}
+                                    className="h-2 w-2 shrink-0 rounded-full"
+                                    style={{ background: "linear-gradient(135deg,var(--zc-accent-a),var(--zc-accent-b))" }}
+                                />
+                                <motion.span
+                                    key={currentPhaseLabel ?? "booting"}
+                                    className="num"
+                                    animate={{ opacity: [0.55, 1, 0.55] }}
+                                    transition={{ repeat: Infinity, duration: 1.6, ease: "easeInOut" }}
+                                    style={{ color: "var(--zc-text-1)" }}
+                                >
+                                    {currentPhaseLabel ?? "正在启动迁移…"}
+                                </motion.span>
+                                <span className="ml-auto" style={{ color: "var(--zc-text-3)" }}>
+                                    阶段来自内核真实步骤推送，非估算进度
+                                </span>
+                            </div>
+                        )}
                     </motion.section>
                 )}
 

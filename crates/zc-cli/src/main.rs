@@ -535,6 +535,18 @@ fn cmd_startup(args: &[String]) -> Result<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
+/// 迁移相位 → 行号与中文文案（与 UI 阶段条一一对应）
+fn migrate_phase_row(p: zc_core::migrate::MigratePhase) -> (usize, &'static str) {
+    use zc_core::migrate::MigratePhase as P;
+    match p {
+        P::Copy => (1, "正在复制内容"),
+        P::Verify => (2, "尺寸校验"),
+        P::Link => (3, "建立 junction"),
+        P::Smoke => (4, "冒烟验证"),
+        P::Cleanup => (5, "清理备份"),
+    }
+}
+
 fn cmd_migrate(args: &[String]) -> Result<ExitCode> {
     let action = args.get(1).map(|s| s.as_str()).unwrap_or("plan");
     let src = PathBuf::from(args.get(2).cloned().unwrap_or_default());
@@ -553,7 +565,23 @@ fn cmd_migrate(args: &[String]) -> Result<ExitCode> {
             if !args.contains(&"--yes".to_string()) {
                 return Err(Error::Other("apply 需要显式 --yes 确认（含自动回滚保障）".into()));
             }
-            let id = zc_core::migrate::apply(&plan).map_err(|e| Error::Other(e.to_string()))?;
+            let res = zc_core::migrate::apply_with_phases(&plan, &mut |phase, state| {
+                let (n, label) = migrate_phase_row(phase);
+                match state {
+                    zc_core::migrate::PhaseState::Start => print!("\r[{n}/5] {label}…"),
+                    zc_core::migrate::PhaseState::End => println!("\r[{n}/5] {label} ✓ 完成"),
+                }
+                let _ = std::io::stdout().flush();
+            })
+            .map_err(|e| Error::Other(e.to_string()));
+            // 失败路径不补发 End：把悬着的进行中行收掉再上抛
+            let id = match res {
+                Ok(id) => id,
+                Err(e) => {
+                    println!();
+                    return Err(e);
+                }
+            };
             println!("✓ 迁移完成，junction 已建立。清单 id={id}");
             println!("  undo 方式: zclean migrate undo \"{}\"", plan.src.display());
         }

@@ -264,12 +264,45 @@ fn migrate_plan(src: String, dst_root: String) -> Result<MigrationPlan, String> 
     migrate::plan(Path::new(&src), Path::new(&dst_root)).map_err(|e| e.to_string())
 }
 
+fn migrate_phase_str(p: migrate::MigratePhase) -> &'static str {
+    match p {
+        migrate::MigratePhase::Copy => "copy",
+        migrate::MigratePhase::Verify => "verify",
+        migrate::MigratePhase::Link => "link",
+        migrate::MigratePhase::Smoke => "smoke",
+        migrate::MigratePhase::Cleanup => "cleanup",
+    }
+}
+
+fn migrate_state_str(s: migrate::PhaseState) -> &'static str {
+    match s {
+        migrate::PhaseState::Start => "start",
+        migrate::PhaseState::End => "end",
+    }
+}
+
 /// 执行迁移：内部以当前参数重新 plan 后再 apply，
 /// 防止用过期/被篡改的计划参数套用（fail-closed）。
+///
+/// 慢操作下沉后台线程，阶段推进经 `migrate://phase` 实时推送
+/// （payload = [phase: snake_case 字符串, state: "start"|"end"]），
+/// UI 显示的是内核真实步骤边界，不是估算进度。
 #[tauri::command]
-fn migrate_apply(src: String, dst_root: String) -> Result<String, String> {
+fn migrate_apply(app: tauri::AppHandle, src: String, dst_root: String) -> Result<String, String> {
     let plan = migrate::plan(Path::new(&src), Path::new(&dst_root)).map_err(|e| e.to_string())?;
-    migrate::apply(&plan)
+
+    let app2 = app.clone();
+    let worker = std::thread::spawn(move || {
+        migrate::apply_with_phases(&plan, &mut |phase, state| {
+            use tauri::Emitter as _;
+            let _ = app2.emit(
+                "migrate://phase",
+                vec![migrate_phase_str(phase), migrate_state_str(state)],
+            );
+        })
+    });
+
+    worker.join().map_err(|_| "迁移线程崩溃".to_string())?
 }
 
 /// 手动兜底撤销：摘 junction 并把 `.old` 备份复位为源目录。

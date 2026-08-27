@@ -23,6 +23,32 @@ pub struct MigrationPlan {
     pub total_files: u64,
 }
 
+/// 迁移执行的五个真实阶段 —— 事件由内核实际步骤触发，禁止上层伪造百分比。
+/// 序列化名为 snake_case（copy/verify/link/smoke/cleanup），与前端约定一致。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MigratePhase {
+    /// robocopy 内容搬运
+    Copy,
+    /// 目标尺寸校验
+    Verify,
+    /// 源改名 .old + junction 建立
+    Link,
+    /// junction 冒烟读测
+    Smoke,
+    /// 删除 .old 备份
+    Cleanup,
+}
+
+/// 阶段边界：Start 进入该阶段，End 该阶段成功收尾。
+/// 失败路径不补发 End（调用方以错误为准）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PhaseState {
+    Start,
+    End,
+}
+
 /// 磁盘剩余空间感知的试运行。
 pub fn plan(src: &Path, dst_root: &Path) -> std::io::Result<MigrationPlan> {
     if !src.is_dir() {
@@ -60,8 +86,18 @@ fn walkdir_all(dir: &Path) -> impl Iterator<Item = jwalk::DirEntry<((), ())>> {
 
 /// 执行迁移。返回迁移清单 id（落盘于 data_dir()/migrations/<id>.json）。
 pub fn apply(plan: &MigrationPlan) -> Result<String, String> {
+    apply_with_phases(plan, &mut |_, _| {})
+}
+
+/// 同 [`apply`]，但每个真实阶段的 Start/End 都经 `on_phase` 实时回调
+/// （CLI 打印进度行、Tauri 推 `migrate://phase` 事件均由此驱动）。
+/// 行为与回滚语义与 apply 完全一致；失败路径不补发 End。
+pub fn apply_with_phases(
+    plan: &MigrationPlan,
+    on_phase: &mut dyn FnMut(MigratePhase, PhaseState),
+) -> Result<String, String> {
     let id = crate::scanner::new_session_id();
-    run_steps(plan).map_err(|step_err| {
+    run_steps_tracked(plan, on_phase).map_err(|step_err| {
         // 失败即回滚，并把回滚结论附进错误信息
         match rollback_silent(&plan.src, &plan.dst) {
             Ok(true) => format!("步骤失败[{step_err}] —— 已自动回滚，数据无损"),
@@ -77,12 +113,16 @@ pub fn apply(plan: &MigrationPlan) -> Result<String, String> {
     Ok(id)
 }
 
-fn run_steps(p: &MigrationPlan) -> Result<(), String> {
+fn run_steps_tracked(
+    p: &MigrationPlan,
+    on_phase: &mut dyn FnMut(MigratePhase, PhaseState),
+) -> Result<(), String> {
     if let Some(parent) = p.dst.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("建目标父目录: {e}"))?;
     }
 
     // 1) robocopy 迁移（0/1 视为成功；>=8 为失败，见 robocopy 退出码语义）
+    on_phase(MigratePhase::Copy, PhaseState::Start);
     let rc = Command::new("robocopy")
         .args([
             p.src.as_os_str().to_string_lossy().as_ref(),
@@ -98,8 +138,10 @@ fn run_steps(p: &MigrationPlan) -> Result<(), String> {
     if !(0..=7).contains(&code) {
         return Err(format!("robocopy exit={code}"));
     }
+    on_phase(MigratePhase::Copy, PhaseState::End);
 
     // 2) 尺寸校验（±1 文件大小容差交给 hash 由上层抽检）
+    on_phase(MigratePhase::Verify, PhaseState::Start);
     let (moved_bytes, moved_files) = measure(&p.dst);
     if moved_bytes != p.total_bytes || moved_files != p.total_files {
         return Err(format!(
@@ -107,24 +149,30 @@ fn run_steps(p: &MigrationPlan) -> Result<(), String> {
             p.total_bytes, p.total_files
         ));
     }
+    on_phase(MigratePhase::Verify, PhaseState::End);
 
-    // 3) 源改名 .old（此瞬间源目录已空或仅剩锁定残留）
+    // 3)+4) 源改名 .old（此瞬间源目录已空或仅剩锁定残留），
+    //       junction：原路径重新出现且指向目标 —— 两步同属 Link 阶段
+    on_phase(MigratePhase::Link, PhaseState::Start);
     let old = sibling_old(&p.src);
     let _ = let_go_of_readonly(&p.src);
     fs::rename(&p.src, &old).map_err(|e| format!("源目录改名 .old: {e}"))?;
-
-    // 4) junction：原路径重新出现且指向目标
     if let Err(e) = create_junction(&p.src, &p.dst) {
         return Err(format!("创建 junction: {e}"));
     }
+    on_phase(MigratePhase::Link, PhaseState::End);
 
     // 5) 冒烟：能通过原路径列到目标首层内容
+    on_phase(MigratePhase::Smoke, PhaseState::Start);
     if !fs::read_dir(&p.src).map(|mut i| i.next().is_some()).unwrap_or(false) && p.total_files > 0 {
         return Err("junction 冒烟读取为空".into());
     }
+    on_phase(MigratePhase::Smoke, PhaseState::End);
 
-    // 6) 全部通过才清理 .old
+    // 6) 全部通过才清理 .old（仅此一步触发 Cleanup 阶段事件）
+    on_phase(MigratePhase::Cleanup, PhaseState::Start);
     fs::remove_dir_all(&old).map_err(|e| format!("清理 .old 备份: {e}"))?;
+    on_phase(MigratePhase::Cleanup, PhaseState::End);
     Ok(())
 }
 
@@ -198,5 +246,120 @@ fn is_junction(p: &Path) -> bool {
     match p.symlink_metadata() {
         Ok(m) => m.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0,
         Err(_) => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn touch(dir: &Path, rel: &str, size: usize) {
+        use std::io::Write;
+        let p = dir.join(rel);
+        fs::create_dir_all(p.parent().unwrap()).unwrap();
+        let mut f = fs::File::create(&p).unwrap();
+        f.write_all(&vec![0u8; size]).unwrap();
+    }
+
+    /// 全链路夹具走一遍真实迁移，收集相位事件并断言时序契约。
+    #[test]
+    fn test_phase_events_happy_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("mymod");
+        fs::create_dir_all(&src).unwrap();
+        touch(&src, "readme.txt", 128);
+        touch(&src, "assets/data.bin", 2048);
+
+        let dst_root = tempfile::tempdir().unwrap();
+        let mp = plan(&src, dst_root.path()).expect("试运行");
+        assert_eq!(mp.total_files, 2);
+        assert_eq!(mp.total_bytes, 2176);
+
+        let mut events: Vec<(MigratePhase, PhaseState)> = Vec::new();
+        let id = apply_with_phases(&mp, &mut |ph, st| events.push((ph, st)))
+            .expect("应用应成功");
+
+        println!("相位事件序列: {events:?}");
+        println!("迁移清单 id: {id}");
+        assert!(!id.is_empty());
+        assert!(is_junction(&src), "迁移完成后原路径应是 junction");
+
+        // 契约 1：首事件必须是 Copy.Start
+        assert_eq!(
+            events.first(),
+            Some(&(MigratePhase::Copy, PhaseState::Start)),
+            "首个事件应为 Copy.Start"
+        );
+
+        // 契约 2：非空序列必须包含 Verify.End
+        assert!(
+            !events.is_empty()
+                && events.contains(&(MigratePhase::Verify, PhaseState::End)),
+            "序列须含 Verify.End"
+        );
+
+        // 契约 3：Link.End 先于 Smoke.Start
+        let link_end = events
+            .iter()
+            .position(|e| *e == (MigratePhase::Link, PhaseState::End))
+            .expect("缺少 Link.End");
+        let smoke_start = events
+            .iter()
+            .position(|e| *e == (MigratePhase::Smoke, PhaseState::Start))
+            .expect("缺少 Smoke.Start");
+        assert!(link_end < smoke_start, "Link.End 必须先于 Smoke.Start");
+
+        // 契约 4：每个相位内 Start 必在其 End 之前（且严格成对）
+        for ph in [
+            MigratePhase::Copy,
+            MigratePhase::Verify,
+            MigratePhase::Link,
+            MigratePhase::Smoke,
+            MigratePhase::Cleanup,
+        ] {
+            let states: Vec<&PhaseState> = events
+                .iter()
+                .filter(|(p, _)| *p == ph)
+                .map(|(_, s)| s)
+                .collect();
+            assert_eq!(
+                states,
+                vec![&PhaseState::Start, &PhaseState::End],
+                "{ph:?} 相位须成对发射且 Start 在前"
+            );
+        }
+
+        // 收尾：确定性全序列恒等（真实流程只会发出这 10 个边界）
+        assert_eq!(
+            events,
+            vec![
+                (MigratePhase::Copy, PhaseState::Start),
+                (MigratePhase::Copy, PhaseState::End),
+                (MigratePhase::Verify, PhaseState::Start),
+                (MigratePhase::Verify, PhaseState::End),
+                (MigratePhase::Link, PhaseState::Start),
+                (MigratePhase::Link, PhaseState::End),
+                (MigratePhase::Smoke, PhaseState::Start),
+                (MigratePhase::Smoke, PhaseState::End),
+                (MigratePhase::Cleanup, PhaseState::Start),
+                (MigratePhase::Cleanup, PhaseState::End),
+            ]
+        );
+    }
+
+    #[test]
+    fn phase_snake_case_serialization() {
+        assert_eq!(
+            serde_json::to_string(&MigratePhase::Copy).unwrap(),
+            "\"copy\""
+        );
+        assert_eq!(
+            serde_json::to_string(&PhaseState::Start).unwrap(),
+            "\"start\""
+        );
+        assert_eq!(
+            serde_json::to_string(&MigratePhase::Cleanup).unwrap(),
+            "\"cleanup\""
+        );
     }
 }
