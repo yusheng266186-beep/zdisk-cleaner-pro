@@ -1,0 +1,16 @@
+[package]
+name = "zc-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "zclean"
+path = "src/main.rs"
+
+[dependencies]
+zc-core = { path = "../zc-core" }
+zc-rules = { path = "../zc-rules" }
+serde = { workspace = true }
+serde_json = { workspace = true }

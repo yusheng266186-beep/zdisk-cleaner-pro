@@ -1,91 +1,58 @@
-# ZDiskCleaner Pro · 深度磁盘清理
+# ZDiskCleaner Pro · 安全空间管理站（v3 从零重构中）
 
 > 磁盘满的时候，人总是先怪自己装了太多东西。其实大多数时候，是缓存悄悄替你做了决定。
 
-ZDiskCleaner Pro 是一款 Windows 深度磁盘清理工具，由 ZDiskCleaner 完全重构而来。它扫描 C 盘上 48 类缓存与垃圾（浏览器、开发工具、聊天应用、系统残留），默认删除进回收站、随时可恢复，并把"到底释放了多少空间"诚实地告诉你。
+v3 是一次**换地基的重造**：从 Python/tkinter 小工具，升级为 **Rust 内核 + Tauri 2 外壳 + React 前端**的安全空间管理站。当前状态：内核、规则库、headless CLI、提权协议与完整前端已交付；待 VS Build Tools 就绪后即可产出安装包。
 
-> 下载：[Releases 发布页](https://github.com/yusheng266186-beep/zdisk-cleaner-pro/releases) · 完整版本记录：[CHANGELOG](CHANGELOG.md)
+- 操作清单与验收标准：[REBUILD_V3_PLAN.md](REBUILD_V3_PLAN.md)
+- 决策记录：[docs/adr/](docs/adr/) · 规则手册：[docs/rules.md](docs/rules.md) · 性能基准：[docs/benchmarks.md](docs/benchmarks.md)
+- 完整版本记录：[CHANGELOG.md](CHANGELOG.md)
 
-## 为什么重写它
+## 它凭什么不一样
 
-原版 ZDiskCleaner 是一个 PyInstaller 打包的 tkinter 小工具，功能方向是对的，但细节经不起推敲：回收站大小统计永远偏小、清空回收站会残留元数据、高分屏下整片模糊、搬家功能会去硬搬必然失败的锁定文件。
+| 能力 | 说明 | 对比借鉴对象 |
+| --- | --- | --- |
+| **索引化单遍扫描** | 60 条规则共享一次并行磁盘遍历；实测 28k 文件 3.9s / 内存 ≈17MB | BleachBit 逐规则扫描 |
+| **守卫双闸** | 扫描端剔除保护命中 + 执行端 fail-closed 校验（真实路径解析防链接绕过） | 无开源清理器做到 |
+| **vault 七天后悔药** | 清理先入台账暂存区，整批/单项可还原——"永久删除"也可反悔 | Czkawka 删除不可逆 |
+| **按需最小提权** | 默认无管理员全覆盖；特权操作经一次性 UAC worker（无常驻服务） | v1/v2 整程序提权 |
+| **诚实例电磁铁** | 回收站 ≠ 真实释放，口径分列；[bench] 行机器可读杜绝报告造假 | 继承并制度化 |
 
-于是把它拆开、反编译、逐行分析，然后重写了一遍。重构版保留了原版全部能力，修复了 9 个底层缺陷，并把界面、动画、安全策略全部推倒重来。这个仓库记录的就是这次重写的全部过程。
+## 当前形态怎么用
 
-## 它能做什么
+```bash
+# 内核 CLI（无 MSVC 环境即可构建运行）
+cargo build --release -p zc-cli
+target/release/zclean.exe scan                          # 实测扫描，报告落 %LOCALAPPDATA%\ZDiskCleanerPro3\sessions
+target/release/zclean.exe apply <report.json> --mode vault    # 暂存区模式清理（--admin 走 UAC 提权批）
+target/release/zclean.exe undo <session-id>             # 一键还原 vault 批次
+target/release/zclean.exe rules --md > docs/rules.md    # 生成规则手册
 
-### 深度清理（48 条规则）
+# 前端开发（浏览器独立运行，带真机采样 DEMO 数据）
+pnpm --dir ui dev
 
-覆盖系统 / 浏览器 / 开发工具 / 应用 / 日志五大类：Windows 临时文件、更新缓存、崩溃转储、缩略图缓存、DirectX 着色器，Chrome / Edge / Firefox / Brave / Opera / Vivaldi 缓存，pip / npm / yarn / Gradle / Cargo / Go / JetBrains / Conda / HuggingFace，微信 / QQ / 钉钉 / Slack / Steam / Spotify / Discord，NVIDIA 驱动下载缓存等。
-
-每条规则都带风险徽章（安全 / 低 / 中 / 高），默认只勾选安全项。三种保护默认开启：
-
-- 删除进回收站，随时可恢复；
-- 高风险项（如微信聊天文件）默认不勾选；
-- 内置自保护路径——程序永远不会清理自己正在运行的文件。
-
-### 程序搬家
-
-把 pip / npm / yarn / Gradle / Maven / Cargo / VSCode 扩展 / HuggingFace 等缓存目录重定向到其他盘：设置环境变量、执行配置命令、迁移现有数据一步完成。Docker 与微信这类运行时锁文件的场景，只给出手动指引而不硬搬。
-
-### 磁盘分析
-
-大文件（阈值可调）、重复文件（大小 → 头部哈希 → 全量哈希三级过滤，支持"保留最新"）、长期未访问文件、目录占用排行。所有结果支持在资源管理器中定位与回收站删除，删除后局部刷新而不是重新全盘扫描。
-
-### 启动项管理
-
-枚举注册表 Run 键的自启动程序，开关式启用 / 禁用，禁用的项被备份保存、随时恢复。
-
-### 系统级占用检测
-
-Windows.old 旧系统、休眠文件 hiberfil.sys、页面文件——这些不能安全自动删除的大块头，会被检测出来并给出处理引导（打开系统设置或复制命令），而不是假装帮你删掉。
-
-### 优化报告
-
-一键生成 Markdown 体检报告：可清理空间统计、分类明细、搬家建议。
-
-## 关于"诚实"的设计
-
-清理工具最容易撒谎的地方是效果数字。ZDiskCleaner Pro 的原则：
-
-- 回收站模式完成后会明确提示"**清空回收站后才会真正释放磁盘空间**"，而不是把数字直接算进战果；
-- 历史记录区分"移入回收站"与"真实释放"，仪表盘的累计数字只统计后者；
-- 提供"清理后自动清空回收站"选项，一步到位真正释放。
-
-## 使用
-
-从 [Releases](https://github.com/yusheng266186-beep/zdisk-cleaner-pro/releases) 下载 `ZDiskCleanerPro.exe`，双击即用（单文件，无需安装）。
-
-命令行模式：
-
-```
-ZDiskCleanerPro.exe            # 图形界面
-ZDiskCleanerPro.exe --scan     # 仅扫描，输出到控制台
-ZDiskCleanerPro.exe --cli      # 交互式命令行清理
-ZDiskCleanerPro.exe --report   # 生成 Markdown 报告
-ZDiskCleanerPro.exe --info     # 查看系统与磁盘信息
+# 基准
+powershell scripts/bench.ps1 -Iterations 3 >> docs/benchmarks.md
 ```
 
-数据位置：清理历史与设置保存在 `%LOCALAPPDATA%\ZDiskCleanerPro\`。
+桌面壳 `src-tauri` 的 IPC 契约（8 个命令 + 进度事件）已与前端对齐，安装 MSVC 后 `cargo tauri build` 即出 NSIS 安装包：
+
+```
+winget install Microsoft.VisualStudio.2022.BuildTools   # 需管理员，一次性
+```
 
 ## 技术栈
 
-Python 3.12 · tkinter（零第三方 UI 依赖）· ctypes Win32 API · PyInstaller 单文件打包（约 12MB）。
+Rust workspace（zc-core / zc-rules / zc-cli）· Tauri 2 + WebView2 · React 19 + TypeScript strict + Tailwind 4 + motion · SQLite（规划，见 ADR-002）· jwalk/globset/windows-sys/trash 语义自研。
 
-界面为纯 Canvas 自绘组件：环形仪表、流光进度条、涟漪按钮、级联入场、椭圆开关、Toast 通知——全部带动画，且在 100%–200% DPI 下比例一致。
+架构决策与替代方案否决记录见 [ADR-001](docs/adr/ADR-001-stack.md)；MFT 直读引擎推迟原因见 [ADR-003](docs/adr/ADR-003-defer-mft.md)。
 
 ## 版本史
 
 | 版本 | 主题 |
 | --- | --- |
-| v2.0.0 | 完全重构：逆向原版，复刻四大功能，修复 9 个底层缺陷 |
-| v2.1.0 | 功能扩展：仪表盘、启动项管理、清理历史、预览模式、排除目录 |
-| v2.2.0 | 动效升级：涟漪、级联入场、流光进度、悬停强调 |
-| v2.3.0 | 效果与安全：自保护路径、真实释放语义、占用检测、系统级占用 |
-| v2.4.0 | 浅色改版（已回退） |
-| v2.5.0 | 深色回归：配色/图标回归深色系，功能全部保留 |
-
-完整记录见 [CHANGELOG.md](CHANGELOG.md)。
+| v2.x | Python/tkinter 时代：48 条规则、Canvas 自绘动效、诚实释放语义（维护冻结） |
+| v3.0.0-alpha.1 | Rust 内核 + 60 规则 + 提权 worker + 完整前端设计系统（本轮） |
 
 ## 一句话
 

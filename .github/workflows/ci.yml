@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust-core:
+    # 纯逻辑内核（zc-core / zc-rules / zc-cli）在 GNU 工具链即可验证，
+    # 与本机开发环境一致；Tauri 壳构建放到 release job（MSVC）。
+    name: Rust core (gnu)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-gnu
+      - run: cargo test --workspace --exclude zdiskcleaner-pro
+        env:
+          RUSTUP_TOOLCHAIN: stable-x86_64-pc-windows-gnu
+
+  frontend:
+    name: UI (lint + build)
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: ui
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: ui/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+      - run: pnpm build

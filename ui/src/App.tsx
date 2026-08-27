@@ -1,0 +1,120 @@
+import { useEffect, useState } from "react";
+import { AnimatePresence, MotionConfig, motion } from "motion/react";
+import { HeartPulse, Wrench, History, Settings, Command, Radar } from "lucide-react";
+import { Home } from "./pages/Home";
+import { Results } from "./pages/Results";
+import { History as HistoryPage } from "./pages/History";
+import { Tools } from "./pages/Tools";
+import { Radar as RadarPage } from "./pages/Radar";
+import { Settings as SettingsPage } from "./pages/Settings";
+import { CleaningOverlay } from "./pages/CleaningOverlay";
+import { ToastStack } from "./components/ToastStack";
+import { CommandPalette } from "./components/CommandPalette";
+import { springSnappy } from "./lib/motion";
+import { useStore } from "./store";
+
+type Page = "home" | "results" | "history" | "tools" | "radar" | "settings";
+
+const NAV: { id: Page; label: string; icon: typeof HeartPulse }[] = [
+    { id: "home", label: "体检台", icon: HeartPulse },
+    { id: "history", label: "历史", icon: History },
+    { id: "tools", label: "工具箱", icon: Wrench },
+    { id: "radar", label: "空间雷达", icon: Radar },
+    { id: "settings", label: "设置", icon: Settings },
+];
+
+export default function App() {
+    const version = useStore((s) => s.version);
+    const init = useStore((s) => s.init);
+    const [page, setPage] = useState<Page>("home");
+
+    useEffect(() => {
+        void init();
+        // 扫描结束后自动进入结果页
+        const unsub = useStore.subscribe((s, prev) => {
+            if (s.phase === "results" && prev?.phase !== "results") setPage("results");
+        });
+        return unsub;
+    }, [init]);
+
+    return (
+        <MotionConfig reducedMotion="user">
+            <div className="flex h-full">
+                {/* ── 侧栏 ── */}
+                <aside
+                    className="flex w-52 shrink-0 flex-col gap-0.5 border-r p-3"
+                    style={{ background: "var(--zc-surface-1)", borderColor: "var(--zc-border)" }}
+                >
+                    <div className="mb-5 flex items-center gap-2 px-2 pt-2">
+                        <div
+                            className="h-8 w-8 rounded-lg"
+                            style={{ background: "linear-gradient(135deg,var(--zc-accent-a),var(--zc-accent-b))" }}
+                        />
+                        <div>
+                            <div className="text-sm font-semibold">ZDiskCleaner Pro</div>
+                            <div className="text-[10px]" style={{ color: "var(--zc-text-3)" }}>
+                                v3.0.0 · core {version || "…"}
+                            </div>
+                        </div>
+                    </div>
+
+                    {NAV.map(({ id, label, icon: Icon }) => {
+                        const active = page === id || (id === "home" && page === "results");
+                        return (
+                            <button
+                                key={id}
+                                onClick={() => setPage(id)}
+                                className="relative flex items-center gap-2.5 rounded-xl px-3 py-2 text-sm transition-colors"
+                                style={{ color: active ? "var(--zc-text-1)" : "var(--zc-text-2)" }}
+                            >
+                                {active && (
+                                    <motion.span
+                                        layoutId="nav-indicator"
+                                        transition={springSnappy}
+                                        className="absolute inset-0 rounded-xl"
+                                        style={{ background: "var(--zc-surface-3)" }}
+                                    />
+                                )}
+                                <Icon
+                                    size={15}
+                                    className="relative z-10"
+                                    style={active ? { color: "var(--zc-accent-b)" } : undefined}
+                                />
+                                <span className="relative z-10">{label}</span>
+                            </button>
+                        );
+                    })}
+
+                    <div className="mt-auto flex flex-col gap-2 px-2">
+                        <button
+                            onClick={() => useStore.getState().togglePalette(true)}
+                            className="flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-[11px] transition-colors hover:bg-white/5"
+                            style={{ color: "var(--zc-text-3)" }}
+                        >
+                            <Command size={12} /> Ctrl+K 命令面板
+                        </button>
+                        <span className="text-[10px]" style={{ color: "var(--zc-text-3)" }}>
+                            笔笔可恢复，分分都算数
+                        </span>
+                    </div>
+                </aside>
+
+                {/* ── 内容 ── */}
+                <main className="min-w-0 flex-1 overflow-auto p-8">
+                    <AnimatePresence mode="wait">
+                        {page === "home" && <Home key="home" />}
+                        {page === "results" && <Results key="results" />}
+                        {page === "history" && <HistoryPage key="history" />}
+                        {page === "tools" && <Tools key="tools" />}
+                        {page === "radar" && <RadarPage key="radar" />}
+                        {page === "settings" && <SettingsPage key="settings" />}
+                    </AnimatePresence>
+                </main>
+
+                <CleaningOverlay />
+                <ToastStack />
+                <CommandPalette />
+            </div>
+        </MotionConfig>
+    );
+}

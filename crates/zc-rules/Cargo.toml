@@ -1,0 +1,14 @@
+[package]
+name = "zc-rules"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+zc-core = { path = "../zc-core" }
+serde = { workspace = true }
+globset = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

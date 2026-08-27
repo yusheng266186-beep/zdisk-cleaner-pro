@@ -1,0 +1,5 @@
+# 只锁通道，不锁宿主三元组：
+# 本机（无 MSVC）默认安装为 x86_64-pc-windows-gnu，CI 上装的是 msvc。
+[toolchain]
+channel = "stable"
+components = ["clippy", "rustfmt"]

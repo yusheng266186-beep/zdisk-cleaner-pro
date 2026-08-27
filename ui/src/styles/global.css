@@ -1,0 +1,125 @@
+/* 设计令牌 v2 —— 「深空驾驶舱」
+   在 v1 基础上补齐：半径 / 阴影 / 层级 / 焦点环 / 双主题切换。
+   组件内禁止硬编码色值，一律取变量。 */
+@import "tailwindcss";
+
+:root {
+  color-scheme: dark;
+
+  /* 表面层级 */
+  --zc-bg: #0b0e14;
+  --zc-surface-1: #12161f;
+  --zc-surface-2: #181e2a;
+  --zc-surface-3: #202939;
+  --zc-border: rgba(255, 255, 255, 0.08);
+  --zc-border-strong: rgba(255, 255, 255, 0.14);
+
+  /* 品牌 */
+  --zc-accent-a: #6366f1;
+  --zc-accent-b: #22d3ee;
+
+  /* 状态 */
+  --zc-ok: #34d399;
+  --zc-warn: #fbbf24;
+  --zc-danger: #fb7185;
+
+  /* 文字 */
+  --zc-text-1: #f2f5fa;
+  --zc-text-2: #b7c1d3;
+  --zc-text-3: #7c879a;
+
+  /* 半径 */
+  --zc-r-sm: 6px;
+  --zc-r-md: 10px;
+  --zc-r-lg: 16px;
+  --zc-r-full: 999px;
+
+  /* 阴影 */
+  --zc-shadow-panel: 0 12px 40px -12px rgba(0, 0, 0, 0.55);
+  --zc-shadow-pop: 0 24px 80px -20px rgba(0, 0, 0, 0.7);
+
+  /* 动效规格（统一出口） */
+  --zc-dur-micro: 140ms;
+  --zc-dur-panel: 280ms;
+  --zc-ease-standard: cubic-bezier(0.2, 0, 0, 1);
+}
+
+[data-theme="light"] {
+  color-scheme: light;
+  --zc-bg: #f4f6fa;
+  --zc-surface-1: #ffffff;
+  --zc-surface-2: #f0f3f8;
+  --zc-surface-3: #e6ebf3;
+  --zc-border: rgba(15, 23, 42, 0.09);
+  --zc-border-strong: rgba(15, 23, 42, 0.16);
+  --zc-text-1: #10182a;
+  --zc-text-2: #46536b;
+  --zc-text-3: #7c879a;
+  --zc-shadow-panel: 0 12px 40px -18px rgba(15, 23, 42, 0.25);
+  --zc-shadow-pop: 0 24px 80px -24px rgba(15, 23, 42, 0.35);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--zc-bg);
+  color: var(--zc-text-1);
+  font-family:
+    MiSans,
+    "HarmonyOS Sans SC",
+    Inter,
+    "Segoe UI",
+    system-ui,
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+}
+
+input,
+textarea {
+  user-select: text;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--zc-accent-a) 45%, transparent);
+}
+
+/* 细滚动条（深色双态） */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--zc-surface-3) transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--zc-surface-3);
+  border-radius: var(--zc-r-full);
+}
+
+/* 可聚焦元素的键盘焦点环 */
+:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--zc-accent-b) 70%, transparent);
+  outline-offset: 2px;
+  border-radius: var(--zc-r-sm);
+}
+
+/* 数字统一等宽防抖 */
+.num {
+  font-variant-numeric: tabular-nums;
+}
