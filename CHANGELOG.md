@@ -2,6 +2,17 @@
 
 所有版本的变更记录。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [v3.0.0-beta.2.dev] - 工具箱 UI 点亮（启动项 + 迁移中心）
+
+- **启动项管家页**：HKCU Run/RunOnce 表格化呈现，行级禁用（注册表删除+JSON 备份）、
+  已禁用计数徽章、「恢复全部」一键还原；IPC 七命令接入 zc-core::startup
+- **存储迁移中心页**：form→plan→done 两步向导；计划卡展示源→目标/体积/文件数，
+  执行按钮危险红调显式确认，done 态提供「撤销本次迁移」（junction 摘除+原目录复位）；
+  migrate_apply 壳层内部重新 plan 防跨参数篡改
+- 浏览器开发态样例内存可交互（禁用计数随操作变化）
+- 三查复核通过：零硬编码色值违规（1 处品牌渐变白字豁免，与既有主按钮一致）、
+  七命令注册齐全、tsc/vite/cargo check 全绿复跑
+
 ## [v3.0.0-beta.1] - MSVC 贯通 · 应用二进制产出
 
 - **壳层编译贯通**：VS Build Tools VCTools 工作负载补装后，tauri 全依赖树

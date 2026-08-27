@@ -10,10 +10,10 @@ import { motion } from "motion/react";
 import { cascade, pageVariants } from "../lib/motion";
 
 const TOOLS = [
-    { icon: FolderOutput, name: "存储迁移中心", desc: "npm/pip/Gradle/微信等目录跨盘搬迁，junction 回滚保障", tag: "内核已备 · UI 接入中" },
+    { icon: FolderOutput, name: "存储迁移中心", desc: "npm/pip/Gradle/微信等目录跨盘搬迁，junction 回滚保障", tag: "见左侧栏" },
     { icon: ListTree, name: "空间雷达", desc: "Treemap 可视化，下钻即定位大文件", tag: "见左侧栏" },
     { icon: FileClock, name: "重复文件猎手", desc: "XXH3 三级管道，树状分组可撤销删除", tag: "Phase 8" },
-    { icon: Rocket, name: "启动项管家", desc: "Run 键枚举 / 禁用备份还原", tag: "已迁 v2 能力" },
+    { icon: Rocket, name: "启动项管家", desc: "Run 键枚举 / 禁用备份还原", tag: "见左侧栏" },
     { icon: Settings2, name: "深度工具", desc: "WinSxS 组件清理（DISM 进度可视化）/ 还原点", tag: "提权卡协议就绪" },
     { icon: Sparkle, name: "计划维护", desc: "每周静默体检 + 报告到桌面通知", tag: "规划中" },
 ];

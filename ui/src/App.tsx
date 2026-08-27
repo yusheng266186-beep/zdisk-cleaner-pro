@@ -1,24 +1,28 @@
 import { useEffect, useState } from "react";
 import { AnimatePresence, MotionConfig, motion } from "motion/react";
-import { HeartPulse, Wrench, History, Settings, Command, Radar } from "lucide-react";
+import { HeartPulse, Wrench, History, Settings, Command, Radar, Rocket, FolderOutput } from "lucide-react";
 import { Home } from "./pages/Home";
 import { Results } from "./pages/Results";
 import { History as HistoryPage } from "./pages/History";
 import { Tools } from "./pages/Tools";
 import { Radar as RadarPage } from "./pages/Radar";
 import { Settings as SettingsPage } from "./pages/Settings";
+import { StartupManager } from "./pages/StartupManager";
+import { MigrateCenter } from "./pages/MigrateCenter";
 import { CleaningOverlay } from "./pages/CleaningOverlay";
 import { ToastStack } from "./components/ToastStack";
 import { CommandPalette } from "./components/CommandPalette";
 import { springSnappy } from "./lib/motion";
 import { useStore } from "./store";
 
-type Page = "home" | "results" | "history" | "tools" | "radar" | "settings";
+type Page = "home" | "results" | "history" | "tools" | "startup" | "migrate" | "radar" | "settings";
 
 const NAV: { id: Page; label: string; icon: typeof HeartPulse }[] = [
     { id: "home", label: "体检台", icon: HeartPulse },
     { id: "history", label: "历史", icon: History },
     { id: "tools", label: "工具箱", icon: Wrench },
+    { id: "startup", label: "启动项", icon: Rocket },
+    { id: "migrate", label: "迁移中心", icon: FolderOutput },
     { id: "radar", label: "空间雷达", icon: Radar },
     { id: "settings", label: "设置", icon: Settings },
 ];
@@ -106,6 +110,8 @@ export default function App() {
                         {page === "results" && <Results key="results" />}
                         {page === "history" && <HistoryPage key="history" />}
                         {page === "tools" && <Tools key="tools" />}
+                        {page === "startup" && <StartupManager key="startup" />}
+                        {page === "migrate" && <MigrateCenter key="migrate" />}
                         {page === "radar" && <RadarPage key="radar" />}
                         {page === "settings" && <SettingsPage key="settings" />}
                     </AnimatePresence>

@@ -160,10 +160,146 @@ export async function analyzeTree(path = "", depth = 4): Promise<TreeNode> {
     return invoke<TreeNode>("analyze_tree", { path, depth });
 }
 
+/* ── 启动项管家 ───────────────────────────────────────── */
+
+export interface StartupEntry {
+    key_id: string;
+    hive: string;
+    subkey: string;
+    run_once: boolean;
+    name: string;
+    command: string;
+}
+
+export async function listStartups(): Promise<StartupEntry[]> {
+    if (!isDesktop()) {
+        await wait(350);
+        return [...demoStartups];
+    }
+    const { invoke } = await import("@tauri-apps/api/core");
+    return invoke<StartupEntry[]>("startup_list");
+}
+
+export async function disabledCount(): Promise<number> {
+    if (!isDesktop()) return demoStartupBackup.length;
+    const { invoke } = await import("@tauri-apps/api/core");
+    return invoke<number>("startup_disabled_count");
+}
+
+export async function disableStartup(keyId: string): Promise<boolean> {
+    if (!isDesktop()) {
+        await wait(500);
+        const hit = demoStartups.find((e) => e.key_id === keyId);
+        if (!hit) return false;
+        demoStartups = demoStartups.filter((e) => e.key_id !== keyId);
+        demoStartupBackup.push(hit);
+        return true;
+    }
+    const { invoke } = await import("@tauri-apps/api/core");
+    return invoke<boolean>("startup_disable", { keyId });
+}
+
+export async function enableAllStartups(): Promise<number> {
+    if (!isDesktop()) {
+        await wait(700);
+        const n = demoStartupBackup.length;
+        demoStartups = [...demoStartups, ...demoStartupBackup];
+        demoStartupBackup = [];
+        return n;
+    }
+    const { invoke } = await import("@tauri-apps/api/core");
+    return invoke<number>("startup_enable_all");
+}
+
+/* ── 存储迁移中心 ─────────────────────────────────────── */
+
+export interface MigrationPlan {
+    src: string;
+    dst: string;
+    total_bytes: number;
+    total_files: number;
+}
+
+export async function planMigration(src: string, dstRoot: string): Promise<MigrationPlan> {
+    if (!isDesktop()) {
+        await wait(900);
+        // 固定体积假数据：真机口径量级，浏览器开发只看排版
+        return {
+            src,
+            dst: `${dstRoot.replace(/[\\/]+$/, "")}\\${dirNameOf(src)}`,
+            total_bytes: 47_512_809_234,
+            total_files: 218_304,
+        };
+    }
+    const { invoke } = await import("@tauri-apps/api/core");
+    return invoke<MigrationPlan>("migrate_plan", { src, dstRoot });
+}
+
+export async function applyMigration(src: string, dstRoot: string): Promise<string> {
+    if (!isDesktop()) {
+        await wait(2600);
+        return `demo-${Date.now().toString(36)}`;
+    }
+    const { invoke } = await import("@tauri-apps/api/core");
+    return invoke<string>("migrate_apply", { src, dstRoot });
+}
+
+export async function undoMigration(src: string): Promise<string> {
+    if (!isDesktop()) {
+        await wait(1200);
+        return "[演示] junction 已摘除，原目录数据已复位";
+    }
+    const { invoke } = await import("@tauri-apps/api/core");
+    return invoke<string>("migrate_undo", { src });
+}
+
 const hitCount = (f: { hits: unknown[]; overflow_hits: number }) =>
     f.hits.length + (f.overflow_hits ?? 0);
 const byteSum = (f: { hits: { size: number }[]; overflow_bytes: number }) =>
     f.hits.reduce((a, h) => a + h.size, 0) + (f.overflow_bytes ?? 0);
+
+const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+const dirNameOf = (p: string) =>
+    p.replace(/[\\/]+$/, "").split(/[\\/]/).pop() ?? "target-dir";
+
+/* ── 启动项管家的浏览器演示态（可交互：禁用/恢复都在内存里走） ── */
+
+let demoStartups: StartupEntry[] = [
+    {
+        key_id: "hkcu|Software\\Microsoft\\Windows\\CurrentVersion\\Run|CloudDrive",
+        hive: "hkcu",
+        subkey: String.raw`Software\Microsoft\Windows\CurrentVersion\Run`,
+        run_once: false,
+        name: "CloudDrive",
+        command: String.raw`"C:\Users\demo\AppData\Local\CloudDrive\CloudDrive.exe" /min`,
+    },
+    {
+        key_id: "hkcu|Software\\Microsoft\\Windows\\CurrentVersion\\Run|WeChat",
+        hive: "hkcu",
+        subkey: String.raw`Software\Microsoft\Windows\CurrentVersion\Run`,
+        run_once: false,
+        name: "WeChat",
+        command: String.raw`"C:\Program Files\Tencent\WeChat\WeChat.exe" -startup`,
+    },
+    {
+        key_id: "hkcu|Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce|SetupRebuild",
+        hive: "hkcu",
+        subkey: String.raw`Software\Microsoft\Windows\CurrentVersion\RunOnce`,
+        run_once: true,
+        name: "SetupRebuild",
+        command: String.raw`C:\Users\demo\AppData\Local\Setup\rebuild-index.cmd`,
+    },
+    {
+        key_id: "hkcu|Software\\Microsoft\\Windows\\CurrentVersion\\Run|Everything",
+        hive: "hkcu",
+        subkey: String.raw`Software\Microsoft\Windows\CurrentVersion\Run`,
+        run_once: false,
+        name: "Everything",
+        command: String.raw`"C:\Tools\Everything\Everything.exe" -startup`,
+    },
+];
+
+let demoStartupBackup: StartupEntry[] = [];
 
 /* ── 真机采样的演示数据（来源：本仓库 2026-08-27 实测扫描） ── */
 

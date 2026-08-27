@@ -15,8 +15,11 @@ use zc_core::{
     executor::{self, CleanMode},
     history::{self, HistoryRecord},
     manifest,
+    migrate::{self, MigrationPlan},
     models::{Domain, Risk, ScanEvent, ScanReport},
-    scanner, ScanHandle,
+    scanner,
+    startup::{self, StartupEntry},
+    ScanHandle,
 };
 
 static SCAN_HANDLE: OnceLock<ScanHandle> = OnceLock::new();
@@ -33,7 +36,14 @@ pub fn run() {
             rules_meta,
             history_list,
             drives_overview,
-            analyze_tree
+            analyze_tree,
+            startup_list,
+            startup_disabled_count,
+            startup_disable,
+            startup_enable_all,
+            migrate_plan,
+            migrate_apply,
+            migrate_undo
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -218,4 +228,52 @@ fn analyze_tree(path: String, depth: u32) -> Result<analyze::TreeNode, String> {
         analyze::TreeOptions { max_depth: depth.min(6), max_children: 40 },
     )
     .map_err(|e| e.to_string())
+}
+
+/* ── 启动项管家 ─────────────────────────────────────────── */
+
+/// 枚举当前用户自启动项（HKCU Run / RunOnce，读操作无风险）。
+#[tauri::command]
+fn startup_list() -> Result<Vec<StartupEntry>, String> {
+    startup::list_user_startup().map_err(|e| e.to_string())
+}
+
+/// 已禁用数量（本地备份 JSON 中的条目数），供页头徽章。
+#[tauri::command]
+fn startup_disabled_count() -> Result<usize, String> {
+    Ok(startup::disabled_count())
+}
+
+/// 禁用单个启动项：注册表值移入本地备份 JSON，可随时恢复。
+#[tauri::command]
+fn startup_disable(key_id: String) -> Result<bool, String> {
+    startup::disable(&key_id).map_err(|e| e.to_string())
+}
+
+/// 恢复全部被禁用项。返回成功写回的条数。
+#[tauri::command]
+fn startup_enable_all() -> Result<usize, String> {
+    startup::enable_all().map_err(|e| e.to_string())
+}
+
+/* ── 存储迁移中心 ───────────────────────────────────────── */
+
+/// 试运行：只测体积/文件数并生成计划，不搬任何文件。
+#[tauri::command]
+fn migrate_plan(src: String, dst_root: String) -> Result<MigrationPlan, String> {
+    migrate::plan(Path::new(&src), Path::new(&dst_root)).map_err(|e| e.to_string())
+}
+
+/// 执行迁移：内部以当前参数重新 plan 后再 apply，
+/// 防止用过期/被篡改的计划参数套用（fail-closed）。
+#[tauri::command]
+fn migrate_apply(src: String, dst_root: String) -> Result<String, String> {
+    let plan = migrate::plan(Path::new(&src), Path::new(&dst_root)).map_err(|e| e.to_string())?;
+    migrate::apply(&plan)
+}
+
+/// 手动兜底撤销：摘 junction 并把 `.old` 备份复位为源目录。
+#[tauri::command]
+fn migrate_undo(src: String) -> Result<String, String> {
+    migrate::undo(Path::new(&src))
 }
