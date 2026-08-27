@@ -12,6 +12,7 @@ globset = { workspace = true }
 jwalk = { workspace = true }
 rayon = { workspace = true }
 thiserror = { workspace = true }
+rusqlite = { workspace = true }
 xxhash-rust = { workspace = true }
 windows-sys = { workspace = true }
 

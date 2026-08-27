@@ -4,6 +4,12 @@
 
 ## [v3.0.0-beta.2.dev] - 工具箱 UI 点亮（启动项 + 迁移中心）
 
+- **SQLite 台账迁移（ADR-002 收口）**：清理台账与历史由 JSON/JSONL 迁入单文件
+  `ledger.db`（rusqlite 0.32 `bundled` 自带编译——C 编译链走 beta.1 贯通的
+  MSVC 工具链，测试统一经 `scripts/msvc-test.cmd`）；首次打开自动导入旧
+  `manifests/*.json` 与 `history.jsonl` 并把旧文件改名 `.imported` 留档；
+  `CleanManifest::save/load`、`history::append/read_all` 等 zc-core 公共 API
+  零破坏，CLI 与 Tauri 壳无需改动；还原条目按台账插入序返回
 - **迁移阶段进度事件**：迁移执行改为推送五个真实阶段（复制/尺寸校验/junction/冒烟/清理）
   的 Start/End 事件——进度来自内核真实步骤边界，拒绝伪造百分比；四层贯通：
   zc-core `apply_with_phases` 回调 → zc-cli `[n/5]` 中文阶段行 → Tauri `migrate://phase`

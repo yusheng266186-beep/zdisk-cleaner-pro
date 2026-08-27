@@ -1,10 +1,12 @@
-//! 清理历史：JSONL 追加，一行一次批次。供仪表盘趋势与口径审计。
+//! 清理历史：一行一次批次。供仪表盘趋势与口径审计。
+//! 存储已迁至 SQLite（[`crate::ledger`]，ADR-002 收口）；`history.jsonl`
+//! 仅作为一次性导入的遗留载体，导入后改名 `.imported` 留档。
 
 use crate::executor::CleanMode;
+use crate::ledger::LedgerStore;
 use crate::manifest::data_dir;
 use serde::{Deserialize, Serialize};
-use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::io;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -17,28 +19,19 @@ pub struct HistoryRecord {
     pub bytes_moved: u64,
 }
 
+/// 遗留 JSONL 的位置：仅一次性导入流程使用；导入成功后改名加 `.imported` 后缀。
 pub fn history_path() -> PathBuf {
     data_dir().join("history.jsonl")
 }
 
-pub fn append(rec: &HistoryRecord) -> std::io::Result<()> {
-    fs::create_dir_all(data_dir())?;
-    let mut f = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(history_path())?;
-    f.write_all(serde_json::to_vec(rec)?.as_slice())?;
-    f.write_all(b"\n")?;
-    Ok(())
+pub fn append(rec: &HistoryRecord) -> io::Result<()> {
+    LedgerStore::open()?.append_history(rec)
 }
 
-/// 全量读取（文件量级极小；Phase 4 引入索引缓存后再做分页）。
+/// 全量读取，按写入序返回（文件量级极小；Phase 4 引入索引缓存后再做分页）。
 pub fn read_all() -> Vec<HistoryRecord> {
-    match fs::read_to_string(history_path()) {
-        Ok(s) => s
-            .lines()
-            .filter_map(|l| serde_json::from_str(l).ok())
-            .collect(),
+    match LedgerStore::open() {
+        Ok(s) => s.read_history(),
         Err(_) => Vec::new(),
     }
 }
