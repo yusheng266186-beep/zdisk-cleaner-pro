@@ -54,6 +54,7 @@ export function CommandPalette() {
             { id: "nav-history", label: "前往 历史", run: () => setActivePage("history") },
             { id: "nav-tools", label: "前往 工具箱", run: () => setActivePage("tools") },
             { id: "nav-settings", label: "前往 设置", run: () => setActivePage("settings") },
+            { id: "nav-deeptools", label: "前往 深度工具", run: () => setActivePage("deeptools") },
             { id: "scan", label: "开始磁盘体检", hint: "Home", run: () => void startScan() },
             { id: "safe", label: "只勾选安全规则", run: selectSafeOnly },
             { id: "clear", label: "清空勾选", run: clearSelection },

@@ -1,10 +1,11 @@
 import { useEffect } from "react";
 import { AnimatePresence, MotionConfig, motion } from "motion/react";
-import { HeartPulse, Wrench, History, Settings, Command, Radar, Rocket, FolderOutput, FileSearch, Copy } from "lucide-react";
+import { HeartPulse, Wrench, History, Settings, Command, Radar, Rocket, FolderOutput, FileSearch, Copy, ShieldCheck } from "lucide-react";
 import { Home } from "./pages/Home";
 import { Results } from "./pages/Results";
 import { History as HistoryPage } from "./pages/History";
 import { Tools } from "./pages/Tools";
+import { DeepTools } from "./pages/DeepTools";
 import { Radar as RadarPage } from "./pages/Radar";
 import { BigFiles } from "./pages/BigFiles";
 import { Duplicates } from "./pages/Duplicates";
@@ -21,6 +22,7 @@ const NAV: { id: Page; label: string; icon: typeof HeartPulse }[] = [
     { id: "home", label: "体检台", icon: HeartPulse },
     { id: "history", label: "历史", icon: History },
     { id: "tools", label: "工具箱", icon: Wrench },
+    { id: "deeptools", label: "深度工具", icon: ShieldCheck },
     { id: "startup", label: "启动项", icon: Rocket },
     { id: "migrate", label: "迁移中心", icon: FolderOutput },
     { id: "radar", label: "空间雷达", icon: Radar },
@@ -114,6 +116,7 @@ export default function App() {
                         {page === "results" && <Results key="results" />}
                         {page === "history" && <HistoryPage key="history" />}
                         {page === "tools" && <Tools key="tools" />}
+                        {page === "deeptools" && <DeepTools key="deeptools" />}
                         {page === "startup" && <StartupManager key="startup" />}
                         {page === "migrate" && <MigrateCenter key="migrate" />}
                         {page === "radar" && <RadarPage key="radar" />}

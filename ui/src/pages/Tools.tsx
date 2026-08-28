@@ -17,7 +17,7 @@ const TOOLS = [
     { icon: FileSearch, name: "大文件", desc: "≥1MB 文件 Top-N 排行，一键定位到资源管理器", tag: "见左侧栏", go: "bigfiles" },
     { icon: FileClock, name: "重复文件猎手", desc: "XXH3 三级管道，组内标「建议保留最新」，一键定位", tag: "见左侧栏", go: "dupes" },
     { icon: Rocket, name: "启动项管家", desc: "Run 键枚举 / 禁用备份还原", tag: "见左侧栏" },
-    { icon: Settings2, name: "深度工具", desc: "WinSxS 组件清理（DISM 进度可视化）/ 还原点", tag: "提权卡协议就绪" },
+    { icon: Settings2, name: "深度工具", desc: "WinSxS 组件清理（DISM 真实进度）/ 还原点 / 系统级占用指引", tag: "见左侧栏", go: "deeptools" },
     { icon: Sparkle, name: "计划维护", desc: "每周静默体检 + 报告到桌面通知", tag: "规划中" },
 ];
 

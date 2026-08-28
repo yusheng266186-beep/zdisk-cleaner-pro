@@ -14,7 +14,7 @@ export interface Toast {
 export type Phase = "idle" | "scanning" | "results" | "cleaning";
 
 /** 侧栏导航页（自 App.tsx 提升进 store，供任意页面跨页跳转） */
-export type Page = "home" | "results" | "history" | "tools" | "startup" | "migrate" | "radar" | "bigfiles" | "dupes" | "settings";
+export type Page = "home" | "results" | "history" | "tools" | "deeptools" | "startup" | "migrate" | "radar" | "bigfiles" | "dupes" | "settings";
 
 interface StoreState {
     demo: boolean;

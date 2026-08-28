@@ -2,6 +2,22 @@
 
 所有版本的变更记录。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [v3.0.0-beta.6.dev] - GA #2 深度工具卡
+
+- **三张能力卡**：WinSxS 组件清理（DISM /StartComponentCleanup 官方通道）、
+  系统还原点（Checkpoint-Computer，描述经单引号转义防注入）、系统级占用盘点
+  （Windows.old 存在才实测子树字节；hiberfil/pagefile/swapfile 拿不到就诚实标「未知」
+  + 每行「复制指引」直通官方设置路径）；页头安全声明：绝不野删系统文件
+- **DISM 真实百分比**：stdout 逐行解析取行内最新百分比（与正则
+  `(\d+(?:\.\d+)?)%` 等价的手写扫描，零新增依赖）经 `dism://progress` 推送，
+  驱动确定进度条——进度来自真实输出，拒绝伪造
+- **提权策略**：dism/还原点命令在未提权时直接 Err（"需要管理员：…"）不再执行，
+  本次不做命令内自拉起；提权旁路由 `--dism-worker` / `--rp-worker <desc>`
+  main() 前置早退分支承担（UAC 一次授权单进程、不启窗口、结果打印 stdout），
+  UI 层引导「以管理员重启应用」或 zclean apply --admin 提权批
+- 内核 zc-core::system 新增 `OccupancyItem` + `system_occupancy()`（含单测）；
+  侧栏新增「深度工具」（ShieldCheck），工具箱深工卡改「见左侧栏」可点直达
+
 ## [v3.0.0-beta.5.dev] - GA 清单 #1：大文件/重复文件页点亮
 
 - **内核与命令**：zc-core 新增 `largest_files`（jwalk 单遍遍历 + BinaryHeap 小顶堆 top-N

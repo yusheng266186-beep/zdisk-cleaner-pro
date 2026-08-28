@@ -350,6 +350,70 @@ export async function undoMigration(src: string): Promise<string> {
     return invoke<string>("migrate_undo", { src });
 }
 
+/* ── 深度工具：系统级占用 / WinSxS 组件清理 / 还原点 ───── */
+
+/** 内核 OccupancyItem 同构（size=null = ACL 拒绝，诚实标「未知」） */
+export interface OccupancyItem {
+    name: string;
+    path: string;
+    size: number | null;
+    guide_zh: string;
+}
+
+export async function systemOccupancy(): Promise<OccupancyItem[]> {
+    if (!isDesktop()) {
+        await wait(600);
+        // 3 条样例：含 hiberfil size:null（ACL 拒绝口径）
+        return [
+            { name: "Windows.old", path: String.raw`C:\Windows.old`, size: 23.4 * GB, guide_zh: "设置→系统→存储→临时文件→以前的 Windows 安装" },
+            { name: "hiberfil.sys", path: String.raw`C:\hiberfil.sys`, size: null, guide_zh: "管理员运行 powercfg /h off 可关闭休眠并释放" },
+            { name: "pagefile.sys", path: String.raw`C:\pagefile.sys`, size: 8 * GB, guide_zh: "此为虚拟内存，建议通过 系统属性→高级→性能→虚拟内存 调整" },
+        ];
+    }
+    const { invoke } = await import("@tauri-apps/api/core");
+    return invoke<OccupancyItem[]>("system_occupancy");
+}
+
+type DismProgressCb = (pct: number) => void;
+let dismProgressCb: DismProgressCb | null = null;
+
+/** 订阅 DISM 真实百分比（dism://progress，payload = f32）。
+ *  浏览器模式无内核，返回 noop unlisten —— 推进由 dismCleanup 模拟。 */
+export async function onDismProgress(cb: DismProgressCb): Promise<() => void> {
+    dismProgressCb = cb;
+    if (!isDesktop()) return () => { dismProgressCb = null; };
+    const { listen } = await import("@tauri-apps/api/event");
+    const unlisten = await listen<number>("dism://progress", (ev) => cb(ev.payload));
+    return () => {
+        unlisten();
+        dismProgressCb = null;
+    };
+}
+
+/** WinSxS 组件清理：未提权时桌面端以 Err("需要管理员：…") 拒绝，
+ *  由 UI 层展示提权引导。 */
+export async function dismCleanup(): Promise<void> {
+    if (!isDesktop()) {
+        // 演示态：4 次 25% 间隔推进后 resolve（4×400ms = 1.6s）
+        for (let i = 1; i <= 4; i++) {
+            await wait(400);
+            dismProgressCb?.(i * 25);
+        }
+        return;
+    }
+    const { invoke } = await import("@tauri-apps/api/core");
+    await invoke("dism_component_cleanup");
+}
+
+export async function createRestorePoint(desc: string): Promise<void> {
+    if (!isDesktop()) {
+        await wait(1200);
+        return;
+    }
+    const { invoke } = await import("@tauri-apps/api/core");
+    await invoke("create_restore_point", { desc });
+}
+
 const hitCount = (f: { hits: unknown[]; overflow_hits: number }) =>
     f.hits.length + (f.overflow_hits ?? 0);
 const byteSum = (f: { hits: { size: number }[]; overflow_bytes: number }) =>
