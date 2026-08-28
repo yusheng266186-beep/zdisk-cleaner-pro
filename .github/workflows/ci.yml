@@ -12,16 +12,12 @@ jobs:
   rust-core:
     # 纯逻辑内核（zc-core / zc-rules / zc-cli）在 GNU 工具链即可验证，
     # 与本机开发环境一致；Tauri 壳构建放到 release job（MSVC）。
-    name: Rust core (gnu)
+    name: Rust core (msvc)
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: x86_64-pc-windows-gnu
       - run: cargo test --workspace --exclude zdiskcleaner-pro
-        env:
-          RUSTUP_TOOLCHAIN: stable-x86_64-pc-windows-gnu
 
   frontend:
     name: UI (lint + build)

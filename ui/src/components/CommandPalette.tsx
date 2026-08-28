@@ -19,6 +19,7 @@ export function CommandPalette() {
     const selectSafeOnly = useStore((s) => s.selectSafeOnly);
     const clearSelection = useStore((s) => s.clearSelection);
     const toggleTheme = useStore((s) => s.toggleTheme);
+    const setActivePage = useStore((s) => s.setActivePage);
 
     const [q, setQ] = useState("");
     const [idx, setIdx] = useState(0);
@@ -46,6 +47,13 @@ export function CommandPalette() {
 
     const cmds: Cmd[] = useMemo(
         () => [
+            { id: "nav-home", label: "前往 体检台", run: () => setActivePage("home") },
+            { id: "nav-radar", label: "前往 空间雷达", run: () => setActivePage("radar") },
+            { id: "nav-startup", label: "前往 启动项管家", run: () => setActivePage("startup") },
+            { id: "nav-migrate", label: "前往 迁移中心", run: () => setActivePage("migrate") },
+            { id: "nav-history", label: "前往 历史", run: () => setActivePage("history") },
+            { id: "nav-tools", label: "前往 工具箱", run: () => setActivePage("tools") },
+            { id: "nav-settings", label: "前往 设置", run: () => setActivePage("settings") },
             { id: "scan", label: "开始磁盘体检", hint: "Home", run: () => void startScan() },
             { id: "safe", label: "只勾选安全规则", run: selectSafeOnly },
             { id: "clear", label: "清空勾选", run: clearSelection },

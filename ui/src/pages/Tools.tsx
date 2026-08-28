@@ -7,6 +7,7 @@ import {
     Sparkle,
 } from "lucide-react";
 import { motion } from "motion/react";
+import { useStore } from "../store";
 import { cascade, pageVariants } from "../lib/motion";
 
 const TOOLS = [
@@ -33,16 +34,17 @@ export function Tools() {
                         variants={cascade(i)}
                         initial="initial"
                         animate="animate"
-                        whileHover={t.tag.includes("接入") ? { y: -3 } : undefined}
+                        whileHover={"go" in t ? { y: -3 } : undefined}
                         transition={{ type: "spring", stiffness: 380, damping: 26 }}
                         className="rounded-xl border p-5"
                         style={{
                             background: "var(--zc-surface-1)",
                             borderColor: "var(--zc-border)",
-                            cursor: t.tag.includes("接入") ? "pointer" : "default",
-                            opacity: t.tag.startsWith("Phase") || t.tag.startsWith("规划") ? 0.72 : 1,
+                            cursor: "go" in t ? "pointer" : "default",
+                            opacity: "go" in t ? 1 : 0.72,
                         }}
-                    >
+                    onClick={"go" in t ? () => useStore.getState().setActivePage(t.go as "migrate" | "startup") : undefined}
+                        >
                         <div className="flex items-center gap-2">
                             <t.icon size={17} style={{ color: "var(--zc-accent-b)" }} />
                             <span className="font-medium">{t.name}</span>
