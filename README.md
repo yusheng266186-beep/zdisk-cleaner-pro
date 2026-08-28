@@ -1,64 +1,94 @@
-# ZDiskCleaner Pro · 安全空间管理站（v3 从零重构中）
+<div align="center">
 
-> 磁盘满的时候，人总是先怪自己装了太多东西。其实大多数时候，是缓存悄悄替你做了决定。
->
-> **下载**：[beta.3 安装器](https://github.com/yusheng266186-beep/zdisk-cleaner-pro/releases/download/v3.0.0-beta.3/ZDiskCleanerPro_3.0.0_x64-setup.exe)（4.2MB，Ed25519 签名）· 应用内更新已可用（设置 → 应用内更新）
+# ZDiskCleaner Pro
 
-v3 是一次**换地基的重造**：从 Python/tkinter 小工具，升级为 **Rust 内核 + Tauri 2 外壳 + React 前端**的安全空间管理站。当前状态：内核、规则库、headless CLI、提权协议与完整前端已交付；待 VS Build Tools 就绪后即可产出安装包。
+**Rust 内核的安全空间管理站 · v3.0.0 GA**
 
-- 操作清单与验收标准：[REBUILD_V3_PLAN.md](REBUILD_V3_PLAN.md)
-- 决策记录：[docs/adr/](docs/adr/) · 规则手册：[docs/rules.md](docs/rules.md) · 性能基准：[docs/benchmarks.md](docs/benchmarks.md)
-- 完整版本记录：[CHANGELOG.md](CHANGELOG.md)
+[![GA](https://img.shields.io/badge/release-v3.0.0-blue)](https://github.com/yusheng266186-beep/zdisk-cleaner-pro/releases/tag/v3.0.0)
+[![tests](https://img.shields.io/badge/tests-46%20passing-brightgreen)](#工程质量)
+[![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-## 它凭什么不一样
+*磁盘不会说话，但它一直在替你记账。这个工具只是帮你看一眼账单，然后把不要的划掉——笔笔可恢复，分分都算数。*
 
-| 能力 | 说明 | 对比借鉴对象 |
-| --- | --- | --- |
-| **索引化单遍扫描** | 60 条规则共享一次并行磁盘遍历；实测 28k 文件 3.9s / 内存 ≈17MB | BleachBit 逐规则扫描 |
-| **守卫双闸** | 扫描端剔除保护命中 + 执行端 fail-closed 校验（真实路径解析防链接绕过） | 无开源清理器做到 |
-| **vault 七天后悔药** | 清理先入台账暂存区，整批/单项可还原——"永久删除"也可反悔 | Czkawka 删除不可逆 |
-| **按需最小提权** | 默认无管理员全覆盖；特权操作经一次性 UAC worker（无常驻服务） | v1/v2 整程序提权 |
-| **空间雷达** | Squarified Treemap 下钻定位大目录，一键「作为迁移源」联动搬家 |
-| **启动项管家** | Run 键禁用即备份、可一键还原 |
-| **迁移五阶段真进度** | 复制/校验/建链/冒烟/清理逐相推送，拒绝假百分比 |
-| **诚实例电磁铁** | 回收站 ≠ 真实释放，口径分列；[bench] 行机器可读杜绝报告造假 | 继承并制度化 |
+[下载 GA 安装器](https://github.com/yusheng266186-beep/zdisk-cleaner-pro/releases/download/v3.0.0/ZDiskCleanerPro_3.0.0_x64-setup.exe) · [全部 Release](https://github.com/yusheng266186-beep/zdisk-cleaner-pro/releases) · [规则手册](docs/rules.md)
 
-## 当前形态怎么用
+</div>
+
+---
+
+## 为什么是它
+
+| | |
+| --- | --- |
+| 🚀 **索引化单遍扫描** | 60 条规则共享一次并行磁盘遍历——实测 28,236 文件 **3.9 秒**、内存峰值 ≈17MB |
+| 🛡️ **守卫双闸** | 扫描端剔除保护区命中 + 执行端 fail-closed 真实路径解析（防 subst/符号链接绕过），property fuzz 轰炸 160 变异零放行 |
+| ⏪ **vault 七天后悔药** | 清理先入 SQLite 台账暂存区，整批/单项可还原——"永久删除"也可反悔 |
+| 🔑 **按需最小提权** | 默认无管理员全覆盖；特权操作走一次性 UAC worker，无常驻服务 |
+| 📡 **应用内更新** | Ed25519 签名 + GitHub Releases 通道，拒绝未签名包 |
+| 🎯 **诚实口径** | 回收站 ≠ 真实释放，分列计量；进度只来自内核真实阶段事件，拒绝假百分比 |
+
+## 功能全景
+
+- **深度清理**：系统 / 浏览器 / 开发工具 / 应用 / 日志五大域 60 条规则，风险四级，默认只勾安全档
+- **空间雷达**：Squarified Treemap 下钻定位大目录，一键「作为迁移源」
+- **大文件 / 重复文件**：XXH3 三级哈希管道，组内标注「建议保留最新」
+- **存储迁移中心**：junction 搬家工业流程——试运行估算 → robocopy 校验 → `.old` 备份 → 自动回滚保障，五阶段真实进度直播
+- **启动项管家**：Run 键禁用即备份，随时一键还原
+- **深度工具**：WinSxS 组件清理（DISM 真实百分比）/ 系统还原点 / Windows.old·休眠文件·页面文件引导
+- **清理历史**：趋势图 + 台账检索 + 一键还原最近批次
+
+## 快速开始
+
+**安装**：[下载 GA 安装器](https://github.com/yusheng266186-beep/zdisk-cleaner-pro/releases/download/v3.0.0/ZDiskCleanerPro_3.0.0_x64-setup.exe)（4.2MB，需系统 WebView2），双击即用。
+
+**CLI**（无 MSVC 环境亦可构建）：
 
 ```bash
-# 内核 CLI（无 MSVC 环境即可构建运行）
 cargo build --release -p zc-cli
-target/release/zclean.exe scan                          # 实测扫描，报告落 %LOCALAPPDATA%\ZDiskCleanerPro3\sessions
-target/release/zclean.exe apply <report.json> --mode vault    # 暂存区模式清理（--admin 走 UAC 提权批）
+target/release/zclean.exe scan                          # 实测扫描
+target/release/zclean.exe apply <report.json> --mode vault [--admin]
 target/release/zclean.exe undo <session-id>             # 一键还原 vault 批次
-target/release/zclean.exe rules --md > docs/rules.md    # 生成规则手册
-
-# 前端开发（浏览器独立运行，带真机采样 DEMO 数据）
-pnpm --dir ui dev
-
-# 基准
-powershell scripts/bench.ps1 -Iterations 3 >> docs/benchmarks.md
+target/release/zclean.exe tree | dupes | startup | migrate | rules
 ```
 
-桌面壳 `src-tauri` 的 IPC 契约（8 个命令 + 进度事件）已与前端对齐，安装 MSVC 后 `cargo tauri build` 即出 NSIS 安装包：
+**前端开发**（浏览器独立运行，内置真机采样 DEMO 数据）：
+
+```bash
+pnpm --dir ui install && pnpm --dir ui dev
+```
+
+## 架构
 
 ```
-winget install Microsoft.VisualStudio.2022.BuildTools   # 需管理员，一次性
+crates/
+├─ zc-core   纯逻辑内核：扫描引擎 · 守卫 · 执行器 · 台账(SQLite) · 聚合树 · 去重 · 启动项 · 迁移
+├─ zc-rules  60 条内置规则（数据驱动 + 探针）
+└─ zc-cli    headless 客户端（内核第一消费者）
+src-tauri/   Tauri 2 壳：8+ IPC 命令 · 进度事件桥 · 提权 worker
+ui/          React 19 + TS strict + Tailwind 4 + motion：八屏 + 设计系统
 ```
 
-## 技术栈
+技术选型与替代方案否决记录：[ADR-001](docs/adr/ADR-001-stack.md) · 数据层演进：[ADR-002](docs/adr/ADR-002-data-layer.md) · MFT 直读推迟决策：[ADR-003](docs/adr/ADR-003-defer-mft.md)
 
-Rust workspace（zc-core / zc-rules / zc-cli）· Tauri 2 + WebView2 · React 19 + TypeScript strict + Tailwind 4 + motion · SQLite（规划，见 ADR-002）· jwalk/globset/windows-sys/trash 语义自研。
+## 工程质量
 
-架构决策与替代方案否决记录见 [ADR-001](docs/adr/ADR-001-stack.md)；MFT 直读引擎推迟原因见 [ADR-003](docs/adr/ADR-003-defer-mft.md)。
+- **46 个测试全绿**（单元 + 集成 + 夹具 + property fuzz），clippy/tsc 零告警错
+- MSVC / GNU 双工具链可验证；`scripts/` 提供基准与打包脚本
+- 性能基准公开可复现：[docs/benchmarks.md](docs/benchmarks.md)
+- CI：GitHub Actions（Rust core 测试 + UI lint/build）
 
 ## 版本史
 
 | 版本 | 主题 |
 | --- | --- |
-| v2.x | Python/tkinter 时代：48 条规则、Canvas 自绘动效、诚实释放语义（维护冻结） |
-| v3.0.0-alpha.1 | Rust 内核 + 60 规则 + 提权 worker + 完整前端设计系统（本轮） |
+| v1.x | Python + tkinter 小工具（原点） |
+| v2.x | Python 全重构：48 规则 · Canvas 自绘动效 · 诚实释放语义 |
+| **v3.0.0** | **换地基重造：Rust 内核 + Tauri 2 + React · GA**（[完整过程](CHANGELOG.md)） |
 
-## 一句话
+## 安全与隐私
 
-磁盘不会说话，但它一直在替你记账。这个工具只是帮你看一眼账单，然后把不要的划掉——笔笔可恢复，分分都算数。
+数据只留在本机（`%LOCALAPPDATA%\ZDiskCleanerPro3`），没有云端、没有遥测。删除类操作永远先过守卫；详情见各模块文档与 [docs/rules.md](docs/rules.md)。
+
+## License
+
+MIT

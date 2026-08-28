@@ -20,3 +20,4 @@ Thumbs.db
 
 # 更新签名私钥（绝不入库）
 .tauri/
+*.tsbuildinfo
