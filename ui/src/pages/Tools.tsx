@@ -1,5 +1,6 @@
 import {
     FileClock,
+    FileSearch,
     FolderOutput,
     ListTree,
     Rocket,
@@ -7,13 +8,14 @@ import {
     Sparkle,
 } from "lucide-react";
 import { motion } from "motion/react";
-import { useStore } from "../store";
+import { useStore, type Page } from "../store";
 import { cascade, pageVariants } from "../lib/motion";
 
 const TOOLS = [
     { icon: FolderOutput, name: "存储迁移中心", desc: "npm/pip/Gradle/微信等目录跨盘搬迁，junction 回滚保障", tag: "见左侧栏" },
     { icon: ListTree, name: "空间雷达", desc: "Treemap 可视化，下钻即定位大文件", tag: "见左侧栏" },
-    { icon: FileClock, name: "重复文件猎手", desc: "XXH3 三级管道，树状分组可撤销删除", tag: "Phase 8" },
+    { icon: FileSearch, name: "大文件", desc: "≥1MB 文件 Top-N 排行，一键定位到资源管理器", tag: "见左侧栏", go: "bigfiles" },
+    { icon: FileClock, name: "重复文件猎手", desc: "XXH3 三级管道，组内标「建议保留最新」，一键定位", tag: "见左侧栏", go: "dupes" },
     { icon: Rocket, name: "启动项管家", desc: "Run 键枚举 / 禁用备份还原", tag: "见左侧栏" },
     { icon: Settings2, name: "深度工具", desc: "WinSxS 组件清理（DISM 进度可视化）/ 还原点", tag: "提权卡协议就绪" },
     { icon: Sparkle, name: "计划维护", desc: "每周静默体检 + 报告到桌面通知", tag: "规划中" },
@@ -43,7 +45,7 @@ export function Tools() {
                             cursor: "go" in t ? "pointer" : "default",
                             opacity: "go" in t ? 1 : 0.72,
                         }}
-                    onClick={"go" in t ? () => useStore.getState().setActivePage(t.go as "migrate" | "startup") : undefined}
+                    onClick={"go" in t ? () => useStore.getState().setActivePage(t.go as Page) : undefined}
                         >
                         <div className="flex items-center gap-2">
                             <t.icon size={17} style={{ color: "var(--zc-accent-b)" }} />

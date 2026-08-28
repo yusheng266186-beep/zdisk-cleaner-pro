@@ -5,7 +5,7 @@
 //! 注意：本文件依赖 tauri 2（需要 MSVC 工具链才能本地构建，见 ADR-001），
 //! 与 `cargo test`（default-members 仅纯内核 crate）隔离。
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{OnceLock};
 use std::os::windows::ffi::OsStrExt;
@@ -13,6 +13,7 @@ use std::os::windows::ffi::OsStrExt;
 use serde::Serialize;
 use zc_core::{
     analyze,
+    dedup,
     executor::{self, CleanMode},
     history::{self, HistoryRecord},
     manifest,
@@ -46,6 +47,8 @@ pub fn run() {
             migrate_plan,
             migrate_apply,
             migrate_undo,
+            big_files,
+            find_dupes,
             reveal_in_explorer
         ])
         .run(tauri::generate_context!())
@@ -229,6 +232,41 @@ fn analyze_tree(path: String, depth: u32) -> Result<analyze::TreeNode, String> {
     analyze::build_tree(
         Path::new(&root),
         analyze::TreeOptions { max_depth: depth.min(6), max_children: 40 },
+    )
+    .map_err(|e| e.to_string())
+}
+
+/* ── 大文件 / 重复文件猎手 ──────────────────────────────── */
+
+#[derive(Serialize)]
+struct BigFileDto {
+    path: String,
+    size: u64,
+}
+
+/// 大文件 Top-N：单遍 jwalk + 小顶堆截断，只报告 ≥1MB 的文件，不动手。
+/// path 为空时默认取用户主目录；top 夹取 [1,200] 防 UI 爆量。
+#[tauri::command]
+fn big_files(path: String, top: u32) -> Result<Vec<BigFileDto>, String> {
+    let root = if path.is_empty() {
+        std::env::var("USERPROFILE").map_err(|_| "无法定位用户主目录（USERPROFILE）".to_string())?
+    } else {
+        path
+    };
+    let files = analyze::largest_files(Path::new(&root), top.max(1).min(200) as usize, 1024 * 1024)
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .map(|(p, size)| BigFileDto { path: p.to_string_lossy().into_owned(), size })
+        .collect();
+    Ok(files)
+}
+
+/// 重复文件组：XXH3 三级哈希管道（大小 → 头部预哈希 → 全量哈希），只报告不动手。
+#[tauri::command]
+fn find_dupes(path: String, min_mb: u64) -> Result<Vec<dedup::DuplicateGroup>, String> {
+    dedup::find_duplicates(
+        &[PathBuf::from(path)],
+        &dedup::DupOptions { min_size: min_mb * 1024 * 1024 },
     )
     .map_err(|e| e.to_string())
 }

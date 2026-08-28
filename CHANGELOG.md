@@ -2,6 +2,18 @@
 
 所有版本的变更记录。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [v3.0.0-beta.5.dev] - GA 清单 #1：大文件/重复文件页点亮
+
+- **内核与命令**：zc-core 新增 `largest_files`（jwalk 单遍遍历 + BinaryHeap 小顶堆 top-N
+  截断，size 降序返回，含单测）；Tauri 壳新增 `big_files`（path 空 = %USERPROFILE%，
+  top 夹取 [1,200]，≥1MB 起报）与 `find_dupes`（直连 dedup 三级哈希管道）两命令
+- **大文件页**：路径 + Top-N(50/100/200) 表单、骨架加载、序号/体积/路径行式列表、
+  桌面壳「定位」直启资源管理器、空结果态口径明示
+- **重复文件页**：路径 + 最小 MB 门限，「猎取重复」运行态提示三级哈希管道；顶部横幅
+  RollNumber 滚动展示可回收合计（Σ size×(份数-1)）；组卡片标「N 份 × humanSize ·
+  建议保留最新」并给出保留建议行；空态贴实跑门限
+- CLI（zc-cli dedup 子命令）与 UI 走同源内核管道，浏览器演示态提供同构样例数据
+
 ## [v3.0.0-beta.4] - 诚实口径修复 · 真机实测暴露并解决
 
 - **目录命中体积口径修复**：目录级命中在扫描期即聚合整棵子树字节

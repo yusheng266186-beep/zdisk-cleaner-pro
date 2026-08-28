@@ -1,11 +1,13 @@
 import { useEffect } from "react";
 import { AnimatePresence, MotionConfig, motion } from "motion/react";
-import { HeartPulse, Wrench, History, Settings, Command, Radar, Rocket, FolderOutput } from "lucide-react";
+import { HeartPulse, Wrench, History, Settings, Command, Radar, Rocket, FolderOutput, FileSearch, Copy } from "lucide-react";
 import { Home } from "./pages/Home";
 import { Results } from "./pages/Results";
 import { History as HistoryPage } from "./pages/History";
 import { Tools } from "./pages/Tools";
 import { Radar as RadarPage } from "./pages/Radar";
+import { BigFiles } from "./pages/BigFiles";
+import { Duplicates } from "./pages/Duplicates";
 import { Settings as SettingsPage } from "./pages/Settings";
 import { StartupManager } from "./pages/StartupManager";
 import { MigrateCenter } from "./pages/MigrateCenter";
@@ -22,6 +24,8 @@ const NAV: { id: Page; label: string; icon: typeof HeartPulse }[] = [
     { id: "startup", label: "启动项", icon: Rocket },
     { id: "migrate", label: "迁移中心", icon: FolderOutput },
     { id: "radar", label: "空间雷达", icon: Radar },
+    { id: "bigfiles", label: "大文件", icon: FileSearch },
+    { id: "dupes", label: "重复文件", icon: Copy },
     { id: "settings", label: "设置", icon: Settings },
 ];
 
@@ -113,6 +117,8 @@ export default function App() {
                         {page === "startup" && <StartupManager key="startup" />}
                         {page === "migrate" && <MigrateCenter key="migrate" />}
                         {page === "radar" && <RadarPage key="radar" />}
+                        {page === "bigfiles" && <BigFiles key="bigfiles" />}
+                        {page === "dupes" && <Duplicates key="dupes" />}
                         {page === "settings" && <SettingsPage key="settings" />}
                     </AnimatePresence>
                 </main>

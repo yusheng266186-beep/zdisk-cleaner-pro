@@ -167,6 +167,65 @@ export async function revealInExplorer(path: string): Promise<void> {
     await invoke("reveal_in_explorer", { path });
 }
 
+/* ── 大文件 / 重复文件猎手 ────────────────────────────── */
+
+export interface BigFile { path: string; size: number }
+
+/** 内核 DuplicateGroup 同构（XXH3-128 hex + 稳定排序文件清单） */
+export interface DuplicateGroup { size: number; hash: string; files: string[] }
+
+export async function bigFiles(path = "", top = 50): Promise<BigFile[]> {
+    if (!isDesktop()) {
+        await wait(900);
+        return demoBigFiles.map((f) => ({ ...f }));
+    }
+    const { invoke } = await import("@tauri-apps/api/core");
+    return invoke<BigFile[]>("big_files", { path, top });
+}
+
+export async function findDupes(path: string, minMb = 10): Promise<DuplicateGroup[]> {
+    if (!isDesktop()) {
+        await wait(1500);
+        return demoDupes.map((g) => ({ ...g, files: [...g.files] }));
+    }
+    const { invoke } = await import("@tauri-apps/api/core");
+    return invoke<DuplicateGroup[]>("find_dupes", { path, minMb });
+}
+
+const MB = 1024 ** 2;
+const GB = 1024 ** 3;
+
+/** 浏览器演示态：GB~MB 跨量级 6 条，模拟真机 Top-N 排行 */
+const demoBigFiles: BigFile[] = [
+    { path: String.raw`C:\Users\demo\Downloads\starfield-ultimate-edition.iso`, size: 87.4 * GB },
+    { path: String.raw`C:\Users\demo\.ollama\models\blobs\qwen2.5-72b-q4.gguf`, size: 41.6 * GB },
+    { path: String.raw`C:\Users\demo\Videos\4K\gopro-summer-2025.mp4`, size: 12.8 * GB },
+    { path: String.raw`C:\Users\demo\AppData\Local\Docker\wsl\data\ext4.vhdx`, size: 6.2 * GB },
+    { path: String.raw`C:\Users\demo\Downloads\unity-editor-setup-6000.zip`, size: 830 * MB },
+    { path: String.raw`C:\Users\demo\Documents\obs-recordings\2026-08-11.mkv`, size: 42.5 * MB },
+];
+
+/** 浏览器演示态：2 组重复（XXH3-128 十六进制同内核口径） */
+const demoDupes: DuplicateGroup[] = [
+    {
+        size: 3_221_225_472,
+        hash: "8f14e45fceea167a5a36dedd4bea2543",
+        files: [
+            String.raw`D:\Photos\RAW\IMG_20250712_0041.ARW`,
+            String.raw`E:\Backup\Photos\2025\IMG_20250712_0041.ARW`,
+        ],
+    },
+    {
+        size: 18_874_368,
+        hash: "c9b5d1fd4e3b7a02f8d6c1e90a47b356",
+        files: [
+            String.raw`C:\Users\demo\Downloads\setup-sdk-v12.exe`,
+            String.raw`D:\Installers\setup-sdk-v12.exe`,
+            String.raw`E:\Archive\tools\setup-sdk-v12.exe`,
+        ],
+    },
+];
+
 /* ── 启动项管家 ───────────────────────────────────────── */
 
 export interface StartupEntry {
