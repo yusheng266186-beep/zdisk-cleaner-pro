@@ -6,7 +6,7 @@ use crate::models::{FileHit, Finding, ScanEvent, ScanReport};
 use crate::patterns::{literal_root, norm};
 use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
 use jwalk::WalkDir;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -106,6 +106,9 @@ pub fn scan(
     let files_seen = AtomicU64::new(0);
     let bytes_seen = AtomicU64::new(0);
     let findings: std::sync::Mutex<BTreeMap<String, Finding>> = Default::default();
+    // 目录 -> 子树累计字节（含未直接命中的后代），供目录级命中做诚实口径
+    let dir_sizes: std::sync::Mutex<HashMap<PathBuf, u64>> =
+        std::sync::Mutex::new(HashMap::with_capacity(2048));
 
     for root in roots.keys() {
         if handle.cancelled() {
@@ -131,6 +134,14 @@ pub fn scan(
             files_seen.fetch_add(1, Ordering::Relaxed);
             bytes_seen.fetch_add(size, Ordering::Relaxed);
 
+            if !is_dir {
+                let mut anc: Option<&Path> = Some(p.as_path());
+                while let Some(a) = anc {
+                    *dir_sizes.lock().expect("dir_sizes").entry(a.to_path_buf()).or_insert(0) += size;
+                    anc = a.parent();
+                }
+            }
+
             let n = norm(&p);
             for rule_id in matcher.matched_rule_ids(&n) {
                 add_hit(
@@ -154,12 +165,20 @@ pub fn scan(
         bytes_seen: bytes_seen.load(Ordering::Relaxed),
     });
 
+    let dir_map = dir_sizes.into_inner().expect("dir_sizes");
     let mut findings: Vec<Finding> = findings
         .into_inner()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .into_values()
         .collect();
     for f in &mut findings {
+        for h in &mut f.hits {
+            if h.is_dir {
+                if let Some(v) = dir_map.get(&h.path) {
+                    h.size = *v;
+                }
+            }
+        }
         dedup_nested(&mut f.hits);
     }
     findings.retain(|f| f.total_count() > 0);

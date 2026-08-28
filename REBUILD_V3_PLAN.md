@@ -1,6 +1,9 @@
 # ZDiskCleaner Pro v3 · 从零完全重构操作清单
 
-> 状态：**v3.0.0-beta.1 达成**（2026-08-27）——MSVC 贯通，Release 二进制产出。
+> 状态：**beta.4 达成**（2026-08-28）——距 GA `v3.0.0` 仅剩清单见下。
+> - ✅ beta.1~4：MSVC 贯通 / 六件套 UI / 阶段进度事件 / SQLite 台账 / 应用内更新 / 口径修复
+> - ⏳ GA 清单：大文件与重复文件页 UI · 深度工具卡(WinSxS/还原点) · 动效走查 pass ·
+>   winget manifest · 安全校验 property fuzz · soak · 正式 tag `v3.0.0`
 > - 🏆 `target/release/zdiskcleaner-pro.exe` = 11.14MB（≤12MB 验收线达成）
 > - ✅ 全部内核/规则/CLI/提权/前端/Tauri IPC 就绪；35 测试全绿 · clippy/tsc 零告警错
 > - ⏳ 仅剩 NSIS 安装包一步：在 GitHub 可达的终端跑 `scripts/msvc-tauri-build.cmd`

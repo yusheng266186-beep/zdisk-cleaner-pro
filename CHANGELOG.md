@@ -2,6 +2,16 @@
 
 所有版本的变更记录。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [v3.0.0-beta.4] - 诚实口径修复 · 真机实测暴露并解决
+
+- **目录命中体积口径修复**：目录级命中在扫描期即聚合整棵子树字节
+  （walk 时沿祖先累加），实测预告与实际释放首次完全一致——
+  真机清理暴露：预告 423MB / 实搬 1.8GB，修复后含未直接命中子孙
+- 真机战报：C 盘可用 2.76GB → 4.24GB（净释放 ≈1.48GB），
+  锁定文件（显卡驱动占用的 D3DSCache）优雅跳过并列清单
+- 测试 41 全绿（e2e 新增“未命中子孙随目录计入”断言）；测试基础设施新增
+  scripts/msvc-test.cmd（bundled sqlite 的 C 链在 MSVC 下全仓可测）
+
 ## [v3.0.0-beta.3] - 应用内更新上线
 
 - **tauri-updater 接入**：Ed25519 签名（私钥存库外 %USERPROFILE%\.tauri\，已 gitignore），

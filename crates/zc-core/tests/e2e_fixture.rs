@@ -29,6 +29,7 @@ fn scan_clean_undo_full_cycle_on_fixture() {
     fs::create_dir_all(&cache).unwrap();
     fs::write(cache.join("a.tmp"), vec![0u8; 1024]).unwrap();
     fs::write(cache.join("b.tmp"), vec![0u8; 2048]).unwrap();
+    fs::write(cache.join("unmatched.bin"), vec![0u8; 512]).unwrap(); // 不命中但随目录整体搬移
     let keep = root.join("keep");
     fs::create_dir_all(&keep).unwrap();
     fs::write(keep.join("keepme.txt"), b"important").unwrap();
@@ -36,27 +37,27 @@ fn scan_clean_undo_full_cycle_on_fixture() {
     let pairs = vec![("fixture".to_string(), format!("{}/cache/**", norm_of(root)))];
 
     // literal_root 取第一个通配段之前的字面前缀：遍历根即 <root>/cache，
-    // 因此 files_seen = cache(1) + a.tmp + b.tmp = 3，父目录不在其中。
+    // files_seen = cache(1) + a.tmp + b.tmp + unmatched.bin = 4
     let handle = ScanHandle::default();
     let rep = scanner::scan(&pairs, &handle, |_| {}).unwrap();
-    assert_eq!(rep.files_seen, 3);
-    assert_eq!(rep.cleanable_count(), 2);
-    assert_eq!(rep.cleanable_bytes(), 3072);
+    assert_eq!(rep.files_seen, 4);
+    assert_eq!(rep.cleanable_count(), 3);
+    assert_eq!(rep.cleanable_bytes(), 3584); // 1024+2048+512：所有子孙如实计入
 
     // vault 模式清理
     let outcome = executor::apply(&rep, &["fixture".to_string()], executor::CleanMode::Vault)
         .expect("守卫应放行临时树");
-    assert_eq!(outcome.done_files, 2);
+    assert_eq!(outcome.done_files, 3);
     assert_eq!(outcome.requested_bytes, outcome.done_bytes);
     assert!(!cache.join("a.tmp").exists(), "vault 后原件消失");
     assert!(keep.join("keepme.txt").exists(), "非命中文件不受影响");
 
     // 台账还原
     let m = CleanManifest::load(&rep.id).unwrap();
-    assert_eq!(m.entries.len(), 2);
+    assert_eq!(m.entries.len(), 3);
     let (done, failed) = m.undo().unwrap();
     assert!(failed.is_empty(), "{failed:?}");
-    assert_eq!(done, 2);
+    assert_eq!(done, 3);
     assert!(cache.join("a.tmp").exists(), "还原后回到原位");
 }
 
