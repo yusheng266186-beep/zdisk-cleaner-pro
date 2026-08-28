@@ -8,4 +8,4 @@ cd /d "%~dp0.."
 echo [tauri-build] start
 call ui\node_modules\.bin\tauri.cmd build
 echo [tauri-build] exit=%ERRORLEVEL%
-dir /b src-tauri\target\release\bundle\nsis 2>nul
+dir /b src-tauri\target\release\bundle\nsis 2>nul

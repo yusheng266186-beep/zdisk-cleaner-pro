@@ -17,3 +17,6 @@ dist/
 .DS_Store
 Thumbs.db
 .zcache/
+
+# 更新签名私钥（绝不入库）
+.tauri/

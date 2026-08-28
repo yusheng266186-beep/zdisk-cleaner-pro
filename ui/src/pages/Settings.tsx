@@ -2,6 +2,7 @@ import { Moon, Sun, Database } from "lucide-react";
 import { pageVariants, springSnappy } from "../lib/motion";
 import { motion } from "motion/react";
 import { useStore } from "../store";
+import { UpdaterCard } from "../components/UpdaterCard";
 
 export function Settings() {
     const theme = useStore((s) => s.theme);
@@ -11,6 +12,10 @@ export function Settings() {
     return (
         <motion.div variants={pageVariants} initial="initial" animate="animate" exit="exit" className="mx-auto max-w-3xl">
             <h1 className="text-xl font-semibold">设置</h1>
+
+            <Section title="更新">
+                <UpdaterCard />
+            </Section>
 
             <Section title="外观">
                 <Row

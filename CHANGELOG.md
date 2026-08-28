@@ -2,6 +2,14 @@
 
 所有版本的变更记录。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [v3.0.0-beta.3] - 应用内更新上线
+
+- **tauri-updater 接入**：Ed25519 签名（私钥存库外 %USERPROFILE%\.tauri\，已 gitignore），
+  更新通道 = GitHub Releases latest.json；设置页新增「应用内更新」卡
+  （检查→发现新版→下载安装，重启生效文案明示）
+- 打包链新增签名步骤：scripts/msvc-tauri-build.cmd 由 %USERPROFILE%\.tauri\ 提供密钥环境
+- 发布产物三件套：安装器 / .sig 签名 / latest.json
+
 ## [v3.0.0-beta.2.dev] - 工具箱 UI 点亮（启动项 + 迁移中心）
 
 - **SQLite 台账迁移（ADR-002 收口）**：清理台账与历史由 JSON/JSONL 迁入单文件
