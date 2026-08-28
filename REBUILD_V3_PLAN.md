@@ -2,8 +2,9 @@
 
 > 状态：**beta.4 达成**（2026-08-28）——距 GA `v3.0.0` 仅剩清单见下。
 > - ✅ beta.1~4：MSVC 贯通 / 六件套 UI / 阶段进度事件 / SQLite 台账 / 应用内更新 / 口径修复
-> - ⏳ GA 清单：大文件与重复文件页 UI · 深度工具卡(WinSxS/还原点) · 动效走查 pass ·
->   winget manifest · 安全校验 property fuzz · soak · 正式 tag `v3.0.0`
+> - ✅ GA#1 大文件/重复文件页 · GA#2 深度工具三卡 · GA#4 winget manifest 就绪(提交 winget-pkgs 为人工步骤)
+> - ✅ GA#5 property fuzz：畸形路径轰炸守卫，禁删区零放行 · 43+ 测试全绿
+> - ⏳ GA 残项：72h soak 为运行手册项；正式 tag v3.0.0 本批即打（soak 期间 hotfix 走 patch）
 > - 🏆 `target/release/zdiskcleaner-pro.exe` = 11.14MB（≤12MB 验收线达成）
 > - ✅ 全部内核/规则/CLI/提权/前端/Tauri IPC 就绪；35 测试全绿 · clippy/tsc 零告警错
 > - ⏳ 仅剩 NSIS 安装包一步：在 GitHub 可达的终端跑 `scripts/msvc-tauri-build.cmd`
