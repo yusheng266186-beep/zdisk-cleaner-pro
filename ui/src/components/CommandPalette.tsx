@@ -65,7 +65,7 @@ export function CommandPalette() {
                 run: () => togglePalette(false),
             },
         ],
-        [startScan, selectSafeOnly, clearSelection, toggleTheme, togglePalette],
+        [startScan, selectSafeOnly, clearSelection, toggleTheme, togglePalette, setActivePage],
     );
 
     const filtered = cmds.filter((c) => c.label.toLowerCase().includes(q.toLowerCase()));

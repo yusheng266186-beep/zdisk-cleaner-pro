@@ -132,7 +132,7 @@ export const useStore = create<StoreState>((set, get) => ({
 
     toggleSelect(id) {
         const s = new Set(get().selection);
-        s.has(id) ? s.delete(id) : s.add(id);
+        if (s.has(id)) { s.delete(id); } else { s.add(id); }
         set({ selection: s });
     },
 

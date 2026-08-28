@@ -13,7 +13,7 @@ export function CleaningOverlay() {
     const names = (report?.findings ?? [])
         .filter((f) => useStore.getState().selection.has(f.rule_id))
         .map((f) => rules.find((r) => r.id === f.rule_id)?.name_zh ?? f.rule_id);
-    let idx = Math.floor((Date.now() / 260) % Math.max(names.length, 1));
+    const idx = Math.floor((Date.now() / 260) % Math.max(names.length, 1));
 
     return (
         <AnimatePresence>
