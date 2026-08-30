@@ -63,7 +63,7 @@ export async function startScan(cb: ProgressCb, onDone: (r: ScanReport) => void)
         await listen<number[]>("scan://progress", (ev) => {
             progressCb?.(ev.payload[0], ev.payload[1]);
         });
-        const rep = await invoke<ScanReport>("scan_now", {});
+        const rep = await invoke<ScanReport>("scan_now", { includeAdmin: false });
         if (!rep.cancelled) onDone(rep);
         return;
     }

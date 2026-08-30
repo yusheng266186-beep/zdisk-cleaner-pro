@@ -95,40 +95,39 @@ fn ping() -> String {
     format!("zc-core v{}", env!("CARGO_PKG_VERSION"))
 }
 
-/// 全量扫描：后台线程执行；进度经 `scan://progress` = [files, bytes] 推送；
+/// 全量扫描：spawn_blocking 执行（绝不上主线程，窗口/事件循环保持响应）；
+/// 进度经 `scan://progress` = [files, bytes] 推送；
 /// 取消令牌由 cancel_scan 置位；结束报告同时落盘 sessions/ 目录。
 #[tauri::command]
-fn scan_now(app: tauri::AppHandle, include_admin: bool) -> Result<ScanReport, String> {
+async fn scan_now(app: tauri::AppHandle, include_admin: Option<bool>) -> Result<ScanReport, String> {
+    let include_admin = include_admin.unwrap_or(false);
     let handle = SCAN_HANDLE.get_or_init(ScanHandle::default).clone();
 
     let pairs: Vec<(String, String)> = zc_rules::expand_all()
         .into_iter()
         .filter(|(id, _)| include_admin || !zc_rules::find(id).is_some_and(|r| r.admin_required))
         .collect();
-    let app2 = app.clone();
 
-    let reporter = std::thread::spawn(move || {
-        scanner::scan(&pairs, &handle, move |ev| {
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut rep = scanner::scan(&pairs, &handle, move |ev| {
             if let ScanEvent::Entry { files, bytes_seen } = ev {
                 use tauri::Emitter as _;
-                let _ = app2.emit("scan://progress", vec![files, bytes_seen]);
+                let _ = app.emit("scan://progress", vec![files, bytes_seen]);
             }
         })
-    });
-
-    let mut rep = reporter
-        .join()
-        .map_err(|_| "扫描线程崩溃".to_string())?
         .map_err(|e| e.to_string())?;
-    zc_rules::filter_guards(&mut rep.findings);
+        zc_rules::filter_guards(&mut rep.findings);
 
-    let dir = manifest::data_dir().join("sessions");
-    let _ = std::fs::create_dir_all(&dir);
-    let _ = std::fs::write(
-        dir.join(format!("{}.json", rep.id)),
-        serde_json::to_vec_pretty(&rep).unwrap_or_default(),
-    );
-    Ok(rep)
+        let dir = manifest::data_dir().join("sessions");
+        let _ = std::fs::create_dir_all(&dir);
+        let _ = std::fs::write(
+            dir.join(format!("{}.json", rep.id)),
+            serde_json::to_vec_pretty(&rep).unwrap_or_default(),
+        );
+        Ok(rep)
+    })
+    .await
+    .map_err(|_| "扫描后台任务失败".to_string())?
 }
 
 #[tauri::command]
@@ -181,43 +180,51 @@ struct OutcomeDto {
 }
 
 #[tauri::command]
-fn clean_selected(
+async fn clean_selected(
     report: ScanReport,
     rule_ids: Vec<String>,
     mode: CleanMode,
 ) -> Result<OutcomeDto, String> {
-    let outcome = executor::apply(&report, &rule_ids, mode).map_err(|e| e.to_string())?;
-    let _ = history::append(&HistoryRecord {
-        session_id: report.id.clone(),
-        created_unix: scanner::now_unix(),
-        mode,
-        files: outcome.done_files,
-        bytes_moved: outcome.done_bytes,
-    });
-    Ok(OutcomeDto {
-        requested_files: outcome.requested_files,
-        requested_bytes: outcome.requested_bytes,
-        done_files: outcome.done_files,
-        done_bytes: outcome.done_bytes,
-        failed: outcome.failed,
-        semantics_note: outcome.semantics_note.clone(),
+    tauri::async_runtime::spawn_blocking(move || {
+        let outcome = executor::apply(&report, &rule_ids, mode).map_err(|e| e.to_string())?;
+        let _ = history::append(&HistoryRecord {
+            session_id: report.id.clone(),
+            created_unix: scanner::now_unix(),
+            mode,
+            files: outcome.done_files,
+            bytes_moved: outcome.done_bytes,
+        });
+        Ok(OutcomeDto {
+            requested_files: outcome.requested_files,
+            requested_bytes: outcome.requested_bytes,
+            done_files: outcome.done_files,
+            done_bytes: outcome.done_bytes,
+            failed: outcome.failed,
+            semantics_note: outcome.semantics_note.clone(),
+        })
     })
+    .await
+    .map_err(|_| "清理后台任务失败".to_string())?
 }
 
 #[tauri::command]
-fn undo_session(id: String) -> Result<String, String> {
-    let m = manifest::CleanManifest::load(&id).map_err(|e| e.to_string())?;
-    let (done, failed) = m.undo().map_err(|e| e.to_string())?;
-    if failed.is_empty() {
-        Ok(format!("已还原 {done}/{} 项", m.entries.len()))
-    } else {
-        Ok(format!(
-            "已还原 {done}/{} 项，{} 项失败（首个原因：{}）",
-            m.entries.len(),
-            failed.len(),
-            failed[0].1
-        ))
-    }
+async fn undo_session(id: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let m = manifest::CleanManifest::load(&id).map_err(|e| e.to_string())?;
+        let (done, failed) = m.undo().map_err(|e| e.to_string())?;
+        if failed.is_empty() {
+            Ok(format!("已还原 {done}/{} 项", m.entries.len()))
+        } else {
+            Ok(format!(
+                "已还原 {done}/{} 项，{} 项失败（首个原因：{}）",
+                m.entries.len(),
+                failed.len(),
+                failed[0].1
+            ))
+        }
+    })
+    .await
+    .map_err(|_| "撤销后台任务失败".to_string())?
 }
 
 #[derive(Serialize)]
@@ -227,48 +234,66 @@ struct DriveDto {
     free_bytes: u64,
 }
 
+/// 已挂载盘符容量总览。用 GetLogicalDrivesW 先拿真实存在的盘符位图，
+/// 只查询存在的盘（绝不裸探 A-Z，避免空光驱/残网络映射卡住）；
+/// spawn_blocking 执行，不占主线程。
 #[tauri::command]
-fn drives_overview() -> Vec<DriveDto> {
-    use windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
+async fn drives_overview() -> Vec<DriveDto> {
+    tauri::async_runtime::spawn_blocking(|| {
+        use windows_sys::Win32::Storage::FileSystem::{GetDiskFreeSpaceExW, GetLogicalDrives};
 
-    fn wide(s: &str) -> Vec<u16> {
-        std::ffi::OsStr::new(s).encode_wide().chain([0]).collect()
-    }
+        fn wide(s: &str) -> Vec<u16> {
+            std::ffi::OsStr::new(s).encode_wide().chain([0]).collect()
+        }
 
-    let mut out = Vec::new();
-    for c in b'A'..=b'Z' {
-        let root = format!("{}:\\", c as char);
-        let root_w = wide(&root);
-        let mut total: u64 = 0;
-        let mut free: u64 = 0;
-        unsafe {
-            if GetDiskFreeSpaceExW(root_w.as_ptr(), std::ptr::null_mut(), &mut total, &mut free) != 0
-            {
-                out.push(DriveDto {
-                    label: format!("{}:", c as char),
-                    total_bytes: total,
-                    free_bytes: free,
-                });
+        let bitmask = unsafe { GetLogicalDrives() };
+        let mut out = Vec::new();
+        for c in b'A'..=b'Z' {
+            if bitmask & (1u32 << (c - b'A')) == 0 {
+                continue;
+            }
+            let root = format!("{}:\\", c as char);
+            let root_w = wide(&root);
+            let mut total: u64 = 0;
+            let mut free: u64 = 0;
+            unsafe {
+                if GetDiskFreeSpaceExW(root_w.as_ptr(), std::ptr::null_mut(), &mut total, &mut free)
+                    != 0
+                {
+                    out.push(DriveDto {
+                        label: format!("{}:", c as char),
+                        total_bytes: total,
+                        free_bytes: free,
+                    });
+                }
             }
         }
-    }
-    out
+        out
+    })
+    .await
+    .unwrap_or_default()
 }
 
 /// 空间雷达：构建目录体积聚合树（并行单遍遍历 + 深度/宽度双上限收敛）。
 /// path 为空时默认取用户主目录；depth 超过 6 时截断，防 UI 爆量。
+/// spawn_blocking 执行——主目录遍历可达数十万文件，绝不能占主线程。
 #[tauri::command]
-fn analyze_tree(path: String, depth: u32) -> Result<analyze::TreeNode, String> {
-    let root = if path.is_empty() {
-        std::env::var("USERPROFILE").map_err(|_| "无法定位用户主目录（USERPROFILE）".to_string())?
-    } else {
-        path
-    };
-    analyze::build_tree(
-        Path::new(&root),
-        analyze::TreeOptions { max_depth: depth.min(6), max_children: 40 },
-    )
-    .map_err(|e| e.to_string())
+async fn analyze_tree(path: String, depth: u32) -> Result<analyze::TreeNode, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let root = if path.is_empty() {
+            std::env::var("USERPROFILE")
+                .map_err(|_| "无法定位用户主目录（USERPROFILE）".to_string())?
+        } else {
+            path
+        };
+        analyze::build_tree(
+            Path::new(&root),
+            analyze::TreeOptions { max_depth: depth.min(6), max_children: 40 },
+        )
+        .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|_| "雷达后台任务失败".to_string())?
 }
 
 /* ── 大文件 / 重复文件猎手 ──────────────────────────────── */
@@ -280,30 +305,41 @@ struct BigFileDto {
 }
 
 /// 大文件 Top-N：单遍 jwalk + 小顶堆截断，只报告 ≥1MB 的文件，不动手。
-/// path 为空时默认取用户主目录；top 夹取 [1,200] 防 UI 爆量。
+/// path 为空时默认取用户主目录；top 夹取 [1,200] 防 UI 爆量。spawn_blocking 执行。
 #[tauri::command]
-fn big_files(path: String, top: u32) -> Result<Vec<BigFileDto>, String> {
-    let root = if path.is_empty() {
-        std::env::var("USERPROFILE").map_err(|_| "无法定位用户主目录（USERPROFILE）".to_string())?
-    } else {
-        path
-    };
-    let files = analyze::largest_files(Path::new(&root), top.max(1).min(200) as usize, 1024 * 1024)
-        .map_err(|e| e.to_string())?
-        .into_iter()
-        .map(|(p, size)| BigFileDto { path: p.to_string_lossy().into_owned(), size })
-        .collect();
-    Ok(files)
+async fn big_files(path: String, top: u32) -> Result<Vec<BigFileDto>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let root = if path.is_empty() {
+            std::env::var("USERPROFILE")
+                .map_err(|_| "无法定位用户主目录（USERPROFILE）".to_string())?
+        } else {
+            path
+        };
+        let files =
+            analyze::largest_files(Path::new(&root), top.max(1).min(200) as usize, 1024 * 1024)
+                .map_err(|e| e.to_string())?
+                .into_iter()
+                .map(|(p, size)| BigFileDto { path: p.to_string_lossy().into_owned(), size })
+                .collect();
+        Ok(files)
+    })
+    .await
+    .map_err(|_| "大文件后台任务失败".to_string())?
 }
 
 /// 重复文件组：XXH3 三级哈希管道（大小 → 头部预哈希 → 全量哈希），只报告不动手。
+/// 哈希可能耗时数分钟，spawn_blocking 执行。
 #[tauri::command]
-fn find_dupes(path: String, min_mb: u64) -> Result<Vec<dedup::DuplicateGroup>, String> {
-    dedup::find_duplicates(
-        &[PathBuf::from(path)],
-        &dedup::DupOptions { min_size: min_mb * 1024 * 1024 },
-    )
-    .map_err(|e| e.to_string())
+async fn find_dupes(path: String, min_mb: u64) -> Result<Vec<dedup::DuplicateGroup>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        dedup::find_duplicates(
+            &[PathBuf::from(path)],
+            &dedup::DupOptions { min_size: min_mb * 1024 * 1024 },
+        )
+        .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|_| "查重后台任务失败".to_string())?
 }
 
 /* ── 启动项管家 ─────────────────────────────────────────── */
@@ -334,10 +370,14 @@ fn startup_enable_all() -> Result<usize, String> {
 
 /* ── 存储迁移中心 ───────────────────────────────────────── */
 
-/// 试运行：只测体积/文件数并生成计划，不搬任何文件。
+/// 迁移计划：measure 需全树测量源目录体积，spawn_blocking 执行。
 #[tauri::command]
-fn migrate_plan(src: String, dst_root: String) -> Result<MigrationPlan, String> {
-    migrate::plan(Path::new(&src), Path::new(&dst_root)).map_err(|e| e.to_string())
+async fn migrate_plan(src: String, dst_root: String) -> Result<MigrationPlan, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        migrate::plan(Path::new(&src), Path::new(&dst_root)).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|_| "迁移计划后台任务失败".to_string())?
 }
 
 fn migrate_phase_str(p: migrate::MigratePhase) -> &'static str {
@@ -360,25 +400,25 @@ fn migrate_state_str(s: migrate::PhaseState) -> &'static str {
 /// 执行迁移：内部以当前参数重新 plan 后再 apply，
 /// 防止用过期/被篡改的计划参数套用（fail-closed）。
 ///
-/// 慢操作下沉后台线程，阶段推进经 `migrate://phase` 实时推送
+/// spawn_blocking 执行（robocopy 可达数 GB，绝不上主线程），
+/// 阶段推进经 `migrate://phase` 实时推送
 /// （payload = [phase: snake_case 字符串, state: "start"|"end"]），
 /// UI 显示的是内核真实步骤边界，不是估算进度。
 #[tauri::command]
-fn migrate_apply(app: tauri::AppHandle, src: String, dst_root: String) -> Result<String, String> {
-    let plan = migrate::plan(Path::new(&src), Path::new(&dst_root)).map_err(|e| e.to_string())?;
-
-    let app2 = app.clone();
-    let worker = std::thread::spawn(move || {
+async fn migrate_apply(app: tauri::AppHandle, src: String, dst_root: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let plan =
+            migrate::plan(Path::new(&src), Path::new(&dst_root)).map_err(|e| e.to_string())?;
         migrate::apply_with_phases(&plan, &mut |phase, state| {
             use tauri::Emitter as _;
-            let _ = app2.emit(
+            let _ = app.emit(
                 "migrate://phase",
                 vec![migrate_phase_str(phase), migrate_state_str(state)],
             );
         })
-    });
-
-    worker.join().map_err(|_| "迁移线程崩溃".to_string())?
+    })
+    .await
+    .map_err(|_| "迁移后台任务失败".to_string())?
 }
 
 /// 手动兜底撤销：摘 junction 并把 `.old` 备份复位为源目录。
@@ -408,8 +448,10 @@ fn reveal_in_explorer(path: String) -> Result<(), String> {
 /// 系统级占用盘点：直接透传 zc-core 的只读盘点（Windows.old 实测 +
 /// hiberfil/pagefile/swapfile，ACL 拒绝即 size=None 诚实标「未知」）。
 #[tauri::command]
-fn system_occupancy() -> Vec<zc_core::system::OccupancyItem> {
-    zc_core::system::system_occupancy()
+async fn system_occupancy() -> Vec<zc_core::system::OccupancyItem> {
+    tauri::async_runtime::spawn_blocking(zc_core::system::system_occupancy)
+        .await
+        .unwrap_or_default()
 }
 
 /// WinSxS 组件清理：要求管理员令牌，未提权直接拒绝，不再往下执行。
@@ -418,27 +460,35 @@ fn system_occupancy() -> Vec<zc_core::system::OccupancyItem> {
 /// spawn_elevated_worker + run() 的 --dism-worker 早退分支。
 /// 已提权则内联执行 worker 同一实现，DISM 真实百分比经
 /// `dism://progress`（payload = f32）推给前端驱动确定进度条。
+/// DISM 一跑数分钟，spawn_blocking 执行，窗口绝不冻结。
 #[tauri::command]
-fn dism_component_cleanup(app: tauri::AppHandle) -> Result<(), String> {
+async fn dism_component_cleanup(app: tauri::AppHandle) -> Result<(), String> {
     if !zc_core::is_elevated() {
         return Err("需要管理员：请在弹出的 UAC 中允许".to_string());
     }
-    let code = dism_run(Some(&app));
-    if code == 0 {
-        Ok(())
-    } else {
-        Err(format!("dism.exe 退出码 {code}，详见控制台输出"))
-    }
+    tauri::async_runtime::spawn_blocking(move || {
+        let code = dism_run(Some(&app));
+        if code == 0 {
+            Ok(())
+        } else {
+            Err(format!("dism.exe 退出码 {code}，详见控制台输出"))
+        }
+    })
+    .await
+    .map_err(|_| "DISM 后台任务失败".to_string())?
 }
 
 /// 系统还原点：同样要求管理员令牌（官方 Checkpoint-Computer 通道，不碰注册表野路子）。
 /// --rp-worker <desc> 旁路由 run() 早退分支承接；两 worker 均打印结果到 stdout 供排查。
+/// 还原点创建需数十秒，spawn_blocking 执行。
 #[tauri::command]
-fn create_restore_point(desc: String) -> Result<(), String> {
+async fn create_restore_point(desc: String) -> Result<(), String> {
     if !zc_core::is_elevated() {
         return Err("需要管理员：请在弹出的 UAC 中允许".to_string());
     }
-    rp_run(&desc)
+    tauri::async_runtime::spawn_blocking(move || rp_run(&desc))
+        .await
+        .map_err(|_| "还原点后台任务失败".to_string())?
 }
 
 /// DISM 组件清理共用执行体：命令内联路径（app=Some，emit 进度事件）与

@@ -106,22 +106,28 @@ export const useStore = create<StoreState>((set, get) => ({
     async startScan() {
         if (get().phase === "scanning") return;
         set({ phase: "scanning", scanFiles: 0, scanBytes: 0, report: null, selection: new Set(), cleanOutcome: null });
-        await ipc.startScan(
-            (files, bytes) => set({ scanFiles: files, scanBytes: bytes }),
-            (report) => {
-                // 默认只勾选安全档，且剔除零命中
-                const safe = new Set(
-                    report.findings
-                        .filter((f) => totalHits(f) > 0)
-                        .filter((f) => get().rules.find((r) => r.id === f.rule_id)?.risk === "safe")
-                        .map((f) => f.rule_id),
-                );
-                set({ phase: "results", report, selection: safe });
-                const bytes = cleanableBytes(report);
-                const count = safe.size;
-                get().toast("info", `扫描完成：${humanSize(bytes)} 待清理 · 勾选 ${count} 条安全规则`);
-            },
-        );
+        try {
+            await ipc.startScan(
+                (files, bytes) => set({ scanFiles: files, scanBytes: bytes }),
+                (report) => {
+                    // 默认只勾选安全档，且剔除零命中
+                    const safe = new Set(
+                        report.findings
+                            .filter((f) => totalHits(f) > 0)
+                            .filter((f) => get().rules.find((r) => r.id === f.rule_id)?.risk === "safe")
+                            .map((f) => f.rule_id),
+                    );
+                    set({ phase: "results", report, selection: safe });
+                    const bytes = cleanableBytes(report);
+                    const count = safe.size;
+                    get().toast("info", `扫描完成：${humanSize(bytes)} 待清理 · 勾选 ${count} 条安全规则`);
+                },
+            );
+        } catch (e) {
+            // 扫描失败绝不静默卡在 0：回 idle 并把原因抛给用户
+            set({ phase: "idle" });
+            get().toast("err", `扫描失败：${e instanceof Error ? e.message : String(e)}`);
+        }
     },
 
     cancelScan() {

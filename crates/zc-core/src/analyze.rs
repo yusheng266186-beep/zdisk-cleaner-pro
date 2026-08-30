@@ -1,14 +1,16 @@
 //! 空间雷达数据源：并行目录体积聚合树。
 //!
-//! 单遍遍历（与扫描引擎同款 jwalk 线程池），边走边把每个条目的
-//! 大小累加到其所有祖先节点；内存按「深度裁剪 + 每层仅保留前 N 大」
-//! 双上限收敛，保证 UI 可渲染。
+//! 三段式，杜绝 O(files × depth) 与 O(nodes × dirs) 的隐藏平方级：
+//! ① 并行单遍遍历（jwalk + rayon），每个文件只把体积记到「直接父目录」一格；
+//! ② 按父->子目录索引自底向上求每目录子树合计（memo，每目录只算一次）；
+//! ③ 组装时直接查索引取子目录，内存按「深度裁剪 + 每层仅保留前 N 大」收敛。
 
 use serde::{Deserialize, Serialize};
 use std::cmp::Reverse;
-use std::collections::{BinaryHeap, HashMap};
+use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TreeNode {
@@ -37,100 +39,135 @@ impl Default for TreeOptions {
 }
 
 /// 一次性构建以 `root` 为根的聚合树。
-/// 返回的 root 节点 size 已含全部后代。
+/// 返回的 root 节点 size 已含全部后代（含被 max_children/max_depth 裁掉的部分）。
 pub fn build_tree(root: &Path, opts: TreeOptions) -> std::io::Result<TreeNode> {
     let name = root
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| root.to_string_lossy().to_string());
 
-    // path -> (累计字节, 文件数, 目录数)；单独 files 原子计数兜底防重复进 map 的开销
-    let sizes: std::sync::Mutex<HashMap<PathBuf, (u64, u64)>> =
+    // ── pass 1：并行单遍遍历，每文件只记「直接父目录」一格 ──
+    // 旧实现把每个文件沿祖先链逐级累加（45 万文件 × 十几层 = 数百万次
+    // 加锁 + 路径克隆 + 哈希探测），是雷达分析分钟级耗时的元凶。
+    let direct: std::sync::Mutex<HashMap<PathBuf, (u64, u64)>> =
         std::sync::Mutex::new(HashMap::with_capacity(4096));
+    let subdirs: std::sync::Mutex<HashSet<PathBuf>> =
+        std::sync::Mutex::new(HashSet::with_capacity(4096));
     let files_seen = AtomicU64::new(0);
 
     for entry in jwalk::WalkDir::new(root)
         .follow_links(false)
         .skip_hidden(false)
+        .parallelism(jwalk::Parallelism::RayonDefaultPool {
+            busy_timeout: Duration::from_secs(600),
+        })
         .into_iter()
         .filter_map(|e| e.ok())
     {
         if entry.file_type().is_dir() {
-            let p: PathBuf = entry.path();
-            sizes.lock().expect("tree mutex").entry(p).or_insert((0, 0)).1 += 0;
+            subdirs.lock().expect("tree mutex").insert(entry.path());
         } else if let Ok(m) = entry.metadata() {
-            let p: PathBuf = entry.path();
             let sz = m.len();
             files_seen.fetch_add(1, Ordering::Relaxed);
-            // 把大小累加到每个祖先（含自身所在目录）
-            let mut anc = Some(p.as_path());
-            while let Some(cur) = anc {
-                let mut g = sizes.lock().expect("tree mutex");
-                let slot = g.entry(cur.to_path_buf()).or_insert((0, 0));
-                slot.0 += sz;
-                slot.1 += 1;
-                drop(g);
-                anc = cur.parent();
-            }
+            let parent = entry.parent_path().to_path_buf();
+            let mut g = direct.lock().expect("tree mutex");
+            let slot = g.entry(parent).or_insert((0, 0));
+            slot.0 += sz;
+            slot.1 += 1;
         }
     }
 
-    let mut map = sizes.into_inner().expect("tree mutex");
-    let root_entry = map.remove(root).unwrap_or((0, 0));
+    let subdirs = subdirs.into_inner().expect("tree mutex");
+    let direct = direct.into_inner().expect("tree mutex");
+
+    // ── 父目录 -> 直接子目录索引（每种关系只建一次，杜绝组装期全表扫描） ──
+    let mut kids_of: HashMap<&Path, Vec<&Path>> = HashMap::with_capacity(subdirs.len());
+    for d in &subdirs {
+        if let Some(pp) = d.parent() {
+            kids_of.entry(pp).or_default().push(d);
+        }
+    }
+
+    // ── pass 2：自底向上求每目录子树合计（memo，每目录只算一次） ──
+    fn totals<'a>(
+        dir: &'a Path,
+        direct: &HashMap<PathBuf, (u64, u64)>,
+        kids_of: &HashMap<&'a Path, Vec<&'a Path>>,
+        memo: &mut HashMap<&'a Path, (u64, u64)>,
+    ) -> (u64, u64) {
+        if let Some(v) = memo.get(dir) {
+            return *v;
+        }
+        let mut acc = direct.get(dir).copied().unwrap_or((0, 0));
+        if let Some(kids) = kids_of.get(dir) {
+            for &k in kids {
+                let t = totals(k, direct, kids_of, memo);
+                acc.0 += t.0;
+                acc.1 += t.1;
+            }
+        }
+        memo.insert(dir, acc);
+        acc
+    }
+    let mut memo: HashMap<&Path, (u64, u64)> = HashMap::with_capacity(subdirs.len());
+    let root_total = totals(root, &direct, &kids_of, &mut memo);
+
     let mut node = TreeNode {
         name,
         path: crate::patterns::norm(root),
-        size: root_entry.0,
-        files: root_entry.1,
+        size: root_total.0,
+        files: root_total.1,
         dirs: 0,
         children: Vec::new(),
     };
-    assemble(&mut node, root, &mut map, 1, opts);
+    assemble(&mut node, root, &memo, &kids_of, 1, opts);
     Ok(node)
 }
 
 fn assemble(
     parent: &mut TreeNode,
     dir: &Path,
-    map: &mut HashMap<PathBuf, (u64, u64)>,
+    totals: &HashMap<&Path, (u64, u64)>,
+    kids_of: &HashMap<&Path, Vec<&Path>>,
     depth: u32,
     opts: TreeOptions,
 ) {
     if depth > opts.max_depth {
         return;
     }
-    // 收集直接子目录
-    let kids: Vec<(PathBuf, (u64, u64))> = map
-        .iter()
-        .filter(|(p, _)| p.parent().map(|pp| pp == dir).unwrap_or(false))
-        .map(|(p, v)| (p.clone(), *v))
-        .collect();
+    // 直接子目录（索引直查，不再全表过滤）
+    let mut kids: Vec<(&Path, (u64, u64))> = kids_of
+        .get(dir)
+        .map(|ks| {
+            ks.iter()
+                .map(|&k| (k, totals.get(k).copied().unwrap_or((0, 0))))
+                .collect()
+        })
+        .unwrap_or_default();
 
     let mut taken: u64 = 0;
-    let mut kept: Vec<(PathBuf, (u64, u64))> = kids;
-    kept.sort_by_key(|(_, v)| std::cmp::Reverse(v.0));
-    if kept.len() > opts.max_children {
-        let hidden = &kept[opts.max_children..];
-        taken = hidden.iter().map(|(_, v)| v.0).sum();
-        kept.truncate(opts.max_children);
+    kids.sort_by_key(|(_, v)| Reverse(v.0));
+    if kids.len() > opts.max_children {
+        taken = kids[opts.max_children..].iter().map(|(_, v)| v.0).sum();
+        kids.truncate(opts.max_children);
     }
 
-    parent.children.reserve(kept.len());
-    for (path, v) in kept {
+    parent.children.reserve(kids.len());
+    for (path, v) in kids {
         let name = path
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_default();
         let mut child = TreeNode {
             name,
-            path: crate::patterns::norm(&path),
+            path: crate::patterns::norm(path),
             size: v.0,
             files: v.1,
             dirs: 0,
             children: Vec::new(),
         };
         if depth < opts.max_depth {
-            assemble(&mut child, &path, map, depth + 1, opts);
+            assemble(&mut child, path, totals, kids_of, depth + 1, opts);
         }
         child.dirs = child.children.len() as u64;
         parent.dirs += child.dirs + 1;
