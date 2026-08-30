@@ -5085,7 +5085,7 @@ dependencies = [
 
 [[package]]
 name = "zc-cli"
-version = "3.0.2"
+version = "3.0.3"
 dependencies = [
  "serde",
  "serde_json",
@@ -5095,7 +5095,7 @@ dependencies = [
 
 [[package]]
 name = "zc-core"
-version = "3.0.2"
+version = "3.0.3"
 dependencies = [
  "globset",
  "jwalk",
@@ -5111,7 +5111,7 @@ dependencies = [
 
 [[package]]
 name = "zc-rules"
-version = "3.0.2"
+version = "3.0.3"
 dependencies = [
  "globset",
  "serde",
@@ -5121,7 +5121,7 @@ dependencies = [
 
 [[package]]
 name = "zdiskcleaner-pro"
-version = "3.0.2"
+version = "3.0.3"
 dependencies = [
  "serde",
  "serde_json",

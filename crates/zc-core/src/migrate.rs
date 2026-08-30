@@ -188,45 +188,69 @@ fn let_go_of_readonly(_: &Path) -> std::io::Result<()> {
 }
 
 /// mklink /J —— 目录连接点（junction），不需要管理员权限。
+/// 路径先把 `/` 统一成 `\`：cmd 会把 `C:/Temp` 中的 `/Temp` 当作
+/// 开关吃掉（v3.0.2 前 GUI 的正斜杠路径必然触发「无效参数」回滚）。
 fn create_junction(link: &Path, target: &Path) -> std::io::Result<()> {
+    let to_backslash = |p: &Path| {
+        let s = p.as_os_str().to_string_lossy().replace('/', "\\");
+        match s.strip_prefix(r"\\?\") {
+            Some(rest) => rest.to_string(),
+            None => s,
+        }
+    };
     let out = Command::new("cmd")
         .args(["/C", "mklink", "/J"])
-        .arg(link)
-        .arg(target)
+        .arg(to_backslash(link))
+        .arg(to_backslash(target))
         .output()
         .map_err(|e| std::io::Error::other(e.to_string()))?;
     if out.status.success() {
         Ok(())
     } else {
-        Err(std::io::Error::other(String::from_utf8_lossy(&out.stderr)))
+        // mklink 的报错可能走 stdout 也可能走 stderr，两路都收
+        let so = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        let se = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        let msg = match (se.is_empty(), so.is_empty()) {
+            (true, true) => format!("mklink 退出码 {:?}", out.status.code()),
+            (true, false) => so,
+            (_, _) => {
+                if so.is_empty() { se } else { format!("{se}; {so}") }
+            }
+        };
+        Err(std::io::Error::other(msg))
     }
 }
 
 /// 回滚：若 junction 存在先摘除（rmdir junction 不动目标），
-/// `.old` 存在则还原为源目录名。返回是否做了实际动作。
+/// `.old` 存在则还原为源目录名。dst 是本次迁移 robocopy 产生的
+/// 副本（plan 已保证迁移前 dst 不存在），回滚成功后一并清掉，
+/// 否则「数据无损」的同时目标盘还压着一份重复数据。
+/// 返回是否做了实际动作。
 pub fn rollback_silent(src: &Path, dst: &Path) -> std::io::Result<bool> {
     let mut acted = false;
     if src.symlink_metadata().is_ok() && is_junction(src) {
         fs::remove_dir(src)?; // 只拆链接本身
         acted = true;
-    } else if src.is_dir() {
-        // 半搬状态：把已搬到目标的文件搬回来过于复杂——交给人查；
-        // 这里仅当源仍在时不动它
-        let _ = src;
     }
     let old = sibling_old(src);
     if old.is_dir() && !src.exists() {
         fs::rename(&old, src)?;
         acted = true;
     }
+    // 源已还原为真实目录才允许清目标副本；清不动则如实上抛，由调用方提示人工处理
     if acted && dst.is_dir() {
-        // 目标保留：搬运成功一半的内容仍在 dst，供人工核对后删除
+        fs::remove_dir_all(dst)?;
     }
     Ok(acted)
 }
 
-/// 手动 undo 入口：等价 rollback + 打印面向用户的结论。
-pub fn undo(src: &Path) -> Result<String, String> {
+/// 手动 undo：摘除 junction 并把数据复位到原路径。
+/// 两条还原路径：
+///   ① 存在 `.old` 备份（apply 失败回滚后残留 / 旧语义）→ 直接改回原名；
+///   ② 成品迁移（`.old` 已在 Cleanup 删除）→ 按 dst 参数（或迁移清单）
+///      把目标盘数据整体搬回原路径 —— 否则摘完链接原路径直接消失，
+///      数据「滞留」目标盘（v3.0.2 实测踩中，属数据完整性缺陷）。
+pub fn undo(src: &Path, dst: Option<&Path>) -> Result<String, String> {
     if !is_junction(src) {
         return Err("该路径不是 junction，无需 undo".into());
     }
@@ -234,10 +258,46 @@ pub fn undo(src: &Path) -> Result<String, String> {
     let old = sibling_old(src);
     if old.is_dir() {
         fs::rename(&old, src).map_err(|e| format!("恢复源目录: {e}"))?;
-        Ok("junction 已摘除，原目录数据已复位".into())
-    } else {
-        Ok("junction 已摘除（未发现 .old 备份，原目录可能已被此前清理）".into())
+        return Ok("junction 已摘除，原目录数据已复位".into());
     }
+    let dst_path = match dst {
+        Some(d) => Some(d.to_path_buf()),
+        None => find_manifest_dst(src).map_err(|e| format!("读取迁移清单: {e}"))?,
+    };
+    if let Some(d) = dst_path {
+        if d.is_dir() {
+            if let Some(parent) = src.parent() {
+                let _ = fs::create_dir_all(parent);
+            }
+            fs::rename(&d, src).map_err(|e| format!("把数据从目标盘搬回原路径: {e}"))?;
+            return Ok("junction 已摘除，数据已从目标盘搬回原路径".into());
+        }
+    }
+    Err("junction 已摘除，但未找到 .old 备份或迁移清单，无法自动搬回目标盘数据；请从迁移目标目录人工移回".into())
+}
+
+/// 在数据目录的 migrations/ 清单里按源路径找最近一次迁移的 dst（undo 未带 dst 时的兜底定位）。
+fn find_manifest_dst(src: &Path) -> std::io::Result<Option<PathBuf>> {
+    let dir = crate::manifest::data_dir().join("migrations");
+    let mut hits: Vec<(std::time::SystemTime, PathBuf)> = Vec::new();
+    for entry in fs::read_dir(&dir)? {
+        let entry = entry?;
+        let meta = entry.metadata()?;
+        if !meta.is_file() {
+            continue;
+        }
+        hits.push((meta.modified()?, entry.path()));
+    }
+    hits.sort_by(|a, b| b.0.cmp(&a.0)); // 最新优先
+    let want = crate::patterns::norm(src);
+    for (_, path) in hits {
+        let Ok(bytes) = fs::read(&path) else { continue };
+        let Ok(plan) = serde_json::from_slice::<MigrationPlan>(&bytes) else { continue };
+        if crate::patterns::norm(&plan.src) == want {
+            return Ok(Some(plan.dst));
+        }
+    }
+    Ok(None)
 }
 
 fn is_junction(p: &Path) -> bool {

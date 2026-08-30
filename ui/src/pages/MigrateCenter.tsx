@@ -98,7 +98,7 @@ export function MigrateCenter() {
         if (undoing || !plan || step !== "done") return;
         setUndoing(true);
         try {
-            const m = await ipc.undoMigration(plan.src);
+            const m = await ipc.undoMigration(plan.src, plan.dst);
             setUndoMsg(m);
             toast("ok", "撤销完成，原目录数据已复位");
         } catch (e) {

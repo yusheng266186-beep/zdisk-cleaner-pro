@@ -593,7 +593,7 @@ fn cmd_migrate(args: &[String]) -> Result<ExitCode> {
     } else {
         args.get(2).ok_or_else(|| Error::Other("migrate undo 需要原路径".into()))?
     };
-    let msg = zc_core::migrate::undo(Path::new(src_ref)).map_err(|e| Error::Other(e.to_string()))?;
+    let msg = zc_core::migrate::undo(Path::new(src_ref), None).map_err(|e| Error::Other(e.to_string()))?;
     println!("{msg}");
     Ok(ExitCode::SUCCESS)
 }

@@ -341,13 +341,13 @@ export async function applyMigration(src: string, dstRoot: string): Promise<stri
     return invoke<string>("migrate_apply", { src, dstRoot });
 }
 
-export async function undoMigration(src: string): Promise<string> {
+export async function undoMigration(src: string, dst?: string): Promise<string> {
     if (!isDesktop()) {
         await wait(1200);
         return "[演示] junction 已摘除，原目录数据已复位";
     }
     const { invoke } = await import("@tauri-apps/api/core");
-    return invoke<string>("migrate_undo", { src });
+    return invoke<string>("migrate_undo", { src, dst: dst ?? null });
 }
 
 /* ── 深度工具：系统级占用 / WinSxS 组件清理 / 还原点 ───── */

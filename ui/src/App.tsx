@@ -64,7 +64,7 @@ export default function App() {
                         <div>
                             <div className="text-sm font-semibold">ZDiskCleaner Pro</div>
                             <div className="text-[10px]" style={{ color: "var(--zc-text-3)" }}>
-                                v3.0.2 · core {version || "…"}
+                                v3.0.3 · core {version || "…"}
                             </div>
                         </div>
                     </div>

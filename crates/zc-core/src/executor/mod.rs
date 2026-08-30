@@ -63,8 +63,26 @@ pub fn apply(report: &ScanReport, rule_ids: &[String], mode: CleanMode) -> Resul
     let refs: Vec<&Path> = hits.iter().map(|h| h.path.as_path()).collect();
     let moved: Vec<(PathBuf, PathBuf)> = match mode {
         CleanMode::RecycleBin => {
-            trash::delete_to_recycle_bin(&refs)?;
-            refs.iter().map(|p| ((*p).to_path_buf(), PathBuf::new())).collect()
+            match trash::delete_to_recycle_bin(&refs) {
+                Ok(()) => refs.iter().map(|p| ((*p).to_path_buf(), PathBuf::new())).collect(),
+                Err(batch_err) => {
+                    // 批量提交被个别锁定文件拖垮（如 GPU 进程占着着色器缓存）：
+                    // 降级逐文件提交，失败项入账 failed，不拖垮其余文件
+                    for p in &refs {
+                        match trash::delete_to_recycle_bin(std::slice::from_ref(p)) {
+                            Ok(()) => {}
+                            Err(e) => outcome.failed.push((
+                                p.display().to_string(),
+                                format!("{batch_err} → 逐项重试仍失败: {e}"),
+                            )),
+                        }
+                    }
+                    refs.iter()
+                        .filter(|p| !outcome.failed.iter().any(|(f, _)| f == &p.display().to_string()))
+                        .map(|p| ((*p).to_path_buf(), PathBuf::new()))
+                        .collect()
+                }
+            }
         }
         CleanMode::Vault => {
             let (ok, failed) = vault::stash(&vault::vault_session_dir(&report.id), &refs);
@@ -96,6 +114,14 @@ pub fn apply(report: &ScanReport, rule_ids: &[String], mode: CleanMode) -> Resul
         entries,
     }
     .save()?;
+
+    if !outcome.failed.is_empty() {
+        outcome.semantics_note = format!(
+            "{}；另有 {} 项未能处理（多为文件被占用），已原样保留",
+            outcome.semantics_note,
+            outcome.failed.len()
+        );
+    }
 
     Ok(outcome)
 }

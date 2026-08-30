@@ -423,8 +423,11 @@ async fn migrate_apply(app: tauri::AppHandle, src: String, dst_root: String) -> 
 
 /// 手动兜底撤销：摘 junction 并把 `.old` 备份复位为源目录。
 #[tauri::command]
-fn migrate_undo(src: String) -> Result<String, String> {
-    migrate::undo(Path::new(&src))
+fn migrate_undo(src: String, dst: Option<String>) -> Result<String, String> {
+    migrate::undo(
+        Path::new(&src),
+        dst.as_deref().map(Path::new),
+    )
 }
 
 /* ── 空间雷达实用动作 ───────────────────────────────────── */
