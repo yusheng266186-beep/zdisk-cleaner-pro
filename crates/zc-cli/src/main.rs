@@ -31,6 +31,8 @@ fn run(args: &[String]) -> zc_core::Result<ExitCode> {
         Some("scan") => cmd_scan(),
         Some("apply") => cmd_apply(args),
         Some("undo") => cmd_undo(args),
+        Some("purge") => cmd_purge(args),
+        Some("sweep") => cmd_sweep(),
         Some("show") => cmd_show(args),
         Some("rules") => cmd_rules(args),
         Some("elevated-run") => cmd_elevated_run(args),
@@ -55,6 +57,8 @@ fn print_help() {
           [--rules id1,id2]   显式规则（缺省=仅安全档）
           [--admin]           需要管理员的规则走一次性 UAC 提权批
   undo SESSION-ID             还原 vault 批次
+  purge SESSION-ID            彻底删除 vault 批次副本（真正释放空间，不可还原）
+  sweep                       清扫全部超过 7 天后悔期的 vault 批次
   show REPORT                 展示历史报告
   rules [--md]                规则列表 / Markdown 手册
   elevated-run --job SPEC     [内部] 提权 worker，由 run_elevated 拉起"
@@ -344,6 +348,35 @@ fn cmd_undo(args: &[String]) -> Result<ExitCode> {
     println!("已还原 {done}/{} 项", m.entries.len());
     for (p, e) in failed.iter().take(20) {
         println!("  ✗ {} — {e}", p.display());
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+fn cmd_purge(args: &[String]) -> Result<ExitCode> {
+    let id = args.get(1).ok_or_else(|| Error::Other("用法: zclean purge SESSION-ID".into()))?;
+    let m = CleanManifest::load(id)?;
+    let (deleted, freed, failed) = m.purge_forever()?;
+    println!("已彻底删除 {deleted} 项，实际释放 {} 字节", format_number(freed));
+    for (p, e) in failed.iter().take(20) {
+        println!("  ✗ {p} — {e}");
+    }
+    if !failed.is_empty() {
+        println!("  （{} 项保留台账，可重试或照常还原）", failed.len());
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+fn cmd_sweep() -> Result<ExitCode> {
+    let s = zc_core::executor::vault::sweep_expired(7).map_err(Error::Other)?;
+    if s.sessions == 0 {
+        println!("没有超过 7 天后悔期的 vault 批次");
+    } else {
+        println!(
+            "已清扫 {} 个过期批次：{} 项 / {} 字节",
+            s.sessions,
+            format_number(s.items as u64),
+            format_number(s.bytes)
+        );
     }
     Ok(ExitCode::SUCCESS)
 }

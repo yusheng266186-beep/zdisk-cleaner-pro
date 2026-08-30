@@ -34,6 +34,7 @@ const NAV: { id: Page; label: string; icon: typeof HeartPulse }[] = [
 
 export default function App() {
     const version = useStore((s) => s.version);
+    const appVer = useStore((s) => s.appVersion);
     const init = useStore((s) => s.init);
     // 页面路由提升进 store：雷达页「作为迁移源」等跨页跳转可复用 setActivePage
     const page = useStore((s) => s.activePage);
@@ -64,7 +65,7 @@ export default function App() {
                         <div>
                             <div className="text-sm font-semibold">ZDiskCleaner Pro</div>
                             <div className="text-[10px]" style={{ color: "var(--zc-text-3)" }}>
-                                v3.0.3 · core {version || "…"}
+                                v{appVer || "…"} · core {version.replace(/^zc-core v/, "") || "…"}
                             </div>
                         </div>
                     </div>

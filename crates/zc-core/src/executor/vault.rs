@@ -118,3 +118,78 @@ fn safe_move(from: &Path, to: &Path) -> std::io::Result<()> {
         }
     })
 }
+
+/// 过期清扫摘要。
+#[derive(Debug, Clone, Copy)]
+pub struct SweepSummary {
+    pub sessions: usize,
+    pub items: usize,
+    pub bytes: u64,
+}
+
+/// 7 天后悔期到期清扫：删除 vault 内副本并抹台账行（history 统计保留）。
+/// 单批失败（文件被占用等）不阻塞其余批次，该批台账保留待下次再扫。
+/// 由应用启动后台线程 / `zclean sweep` 调用，绝不在交互路径上等它。
+pub fn sweep_expired(max_age_days: u64) -> Result<SweepSummary, String> {
+    use crate::ledger::LedgerStore;
+
+    let cutoff = (std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0) as i64)
+        - (max_age_days as i64) * 86_400;
+    let store = LedgerStore::open().map_err(|e| e.to_string())?;
+    let batches = store
+        .expired_vault_batches(cutoff)
+        .map_err(|e| format!("读取过期批次: {e}"))?;
+
+    let mut summary = SweepSummary { sessions: 0, items: 0, bytes: 0 };
+    for (id, total, copies) in batches {
+        let mut all_ok = true;
+        let mut deleted = 0usize;
+        for (_, rel, _) in &copies {
+            if rel.is_empty() {
+                continue;
+            }
+            let p = std::path::PathBuf::from(rel);
+            if !p.exists() {
+                // 副本已不在（如此前整批还原过）：目标状态已达成
+                deleted += 1;
+                continue;
+            }
+            let r = if p.is_dir() { fs::remove_dir_all(&p) } else { fs::remove_file(&p) };
+            match r {
+                Ok(()) => deleted += 1,
+                Err(_) => {
+                    all_ok = false;
+                    break; // 本批保留，下次启动再试
+                }
+            }
+        }
+        if all_ok {
+            let _ = fs::remove_dir_all(vault_session_dir(&id));
+            if store.drop_manifest(&id).is_ok() {
+                summary.sessions += 1;
+                summary.items += deleted;
+                summary.bytes += total;
+            }
+        }
+    }
+
+    // 无主会话目录 GC：vault 下存在、但台账里已无对应批次的目录
+    // （多为半删除残留/异常中断产物）。台账仍存在的目录绝不动。
+    let live: std::collections::HashSet<String> =
+        store.live_manifest_ids().into_iter().collect();
+    let vault_root = crate::manifest::data_dir().join("vault");
+    if let Ok(rd) = fs::read_dir(&vault_root) {
+        for e in rd.filter_map(|e| e.ok()) {
+            let name = e.file_name().to_string_lossy().to_string();
+            if !live.contains(&name) {
+                if fs::remove_dir_all(e.path()).is_ok() {
+                    summary.sessions += 1;
+                }
+            }
+        }
+    }
+    Ok(summary)
+}

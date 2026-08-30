@@ -152,6 +152,23 @@ export async function undoSession(_id: string): Promise<string> {
     return invoke<string>("undo_session", { id: _id });
 }
 
+/** 彻底删除 vault 批次副本：把 7 天后悔期结束的空间真正释放出来。 */
+export async function purgeSession(_id: string): Promise<string> {
+    if (!isDesktop()) {
+        await new Promise((r) => setTimeout(r, 900));
+        return "[演示] 已彻底删除本批副本，空间已释放";
+    }
+    const { invoke } = await import("@tauri-apps/api/core");
+    return invoke<string>("purge_session", { id: _id });
+}
+
+/** 应用自身版本（tauri.conf.json 的 version），与内核版本分开展示。 */
+export async function appVersion(): Promise<string> {
+    if (!isDesktop()) return "browser-dev";
+    const { getVersion } = await import("@tauri-apps/api/app");
+    return getVersion();
+}
+
 /* ── 空间雷达 ─────────────────────────────────────────── */
 
 export async function analyzeTree(path = "", depth = 4): Promise<TreeNode> {

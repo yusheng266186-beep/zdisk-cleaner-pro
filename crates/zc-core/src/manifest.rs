@@ -72,19 +72,48 @@ impl CleanManifest {
         Ok((done, failed))
     }
 
-    pub fn purge_vault_copies(&self) -> Result<usize> {
-        let mut n = 0;
-        for (_, vault_rel) in crate::ledger::LedgerStore::open()?.undo_entries(&self.id) {
-            if !vault_rel.is_empty() {
-                let p = PathBuf::from(&vault_rel);
-                if p.is_file() {
-                    fs::remove_file(&p)?;
-                } else if p.is_dir() {
-                    fs::remove_dir_all(&p)?;
+    /// 彻底删除 vault 副本，返回 (已删项数, 实际释放字节, 失败列表)。
+    /// 全部成功才抹台账行——半失败时保留账本，剩余项可重试或照常还原；
+    /// 已删掉的项此后还原会如实报「副本已不存在」。
+    pub fn purge_forever(&self) -> Result<(usize, u64, Vec<(String, String)>)> {
+        if self.mode != CleanMode::Vault {
+            return Err(crate::error::Error::Other(
+                "回收站批次没有 vault 副本，请在系统回收站中清空".into(),
+            ));
+        }
+        let copies = crate::ledger::LedgerStore::open()?.vault_copies(&self.id);
+        let mut deleted = 0usize;
+        let mut freed = 0u64;
+        let mut failed: Vec<(String, String)> = Vec::new();
+        for (_, rel, size) in copies {
+            if rel.is_empty() {
+                continue;
+            }
+            let p = PathBuf::from(&rel);
+            if !p.exists() {
+                // 副本已不在（如此前整批还原过）：目标状态已达成，不算失败，
+                // 否则这类批次的台账会永远无法抹除、7 天过期清扫也永远清不掉
+                deleted += 1;
+                continue;
+            }
+            let r = if p.is_dir() {
+                fs::remove_dir_all(&p)
+            } else {
+                fs::remove_file(&p)
+            };
+            match r {
+                Ok(()) => {
+                    deleted += 1;
+                    freed += size;
                 }
-                n += 1;
+                Err(e) => failed.push((rel, e.to_string())),
             }
         }
-        Ok(n)
+        if failed.is_empty() {
+            crate::ledger::LedgerStore::open()?.drop_manifest(&self.id)?;
+            // 空会话目录一并移除，vault 下不留空壳
+            let _ = fs::remove_dir_all(crate::executor::vault::vault_session_dir(&self.id));
+        }
+        Ok((deleted, freed, failed))
     }
 }

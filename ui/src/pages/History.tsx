@@ -1,4 +1,5 @@
-import { Archive, History as HistIcon, RotateCcw } from "lucide-react";
+import { useState } from "react";
+import { Archive, History as HistIcon, RotateCcw, Trash2 } from "lucide-react";
 import { motion } from "motion/react";
 import { cascade, pageVariants } from "../lib/motion";
 import { useStore } from "../store";
@@ -6,13 +7,16 @@ import { humanSize, timeAgo } from "../lib/format";
 
 export function History() {
     const history = useStore((s) => s.history);
+    // 彻底删除二次确认：点一下变「再点一次确认」，4 秒未确认自动复位
+    const [confirmId, setConfirmId] = useState<string | null>(null);
     const max = Math.max(1, ...history.map((h) => h.bytes_moved));
 
     return (
         <motion.div variants={pageVariants} initial="initial" animate="animate" exit="exit" className="mx-auto max-w-3xl">
             <h1 className="text-xl font-semibold">清理历史</h1>
             <p className="mt-1 text-xs" style={{ color: "var(--zc-text-3)" }}>
-                「移入」不等于「真实释放」：回收站批次以清空回收站为准，vault 批次 7 天内可还原。
+                「移入」不等于「真实释放」：回收站批次以清空系统回收站为准；vault 批次 7 天内可还原，
+                随时可「彻底删除」立即释放空间，超过 7 天的批次应用启动时自动清扫。
             </p>
 
             {/* 趋势条形图（纯 CSS 高度动画） */}
@@ -60,14 +64,39 @@ export function History() {
                                 提权批
                             </span>
                         )}
-                        {i === 0 && (
-                            <button
-                                onClick={() => void useStore.getState().undoLast()}
-                                className="flex items-center gap-1 rounded-lg border px-2.5 py-1 text-[11px] transition-colors hover:opacity-75"
-                                style={{ borderColor: "var(--zc-border-strong)", color: "var(--zc-ok)" }}
-                            >
-                                <RotateCcw size={11} /> 还原
-                            </button>
+                        {h.mode === "vault" ? (
+                            <>
+                                <button
+                                    onClick={() => void useStore.getState().undoSession(h.session_id)}
+                                    className="flex items-center gap-1 rounded-lg border px-2.5 py-1 text-[11px] transition-colors hover:opacity-75"
+                                    style={{ borderColor: "var(--zc-border-strong)", color: "var(--zc-ok)" }}
+                                >
+                                    <RotateCcw size={11} /> 还原
+                                </button>
+                                <button
+                                    onClick={() => {
+                                        if (confirmId === h.session_id) {
+                                            setConfirmId(null);
+                                            void useStore.getState().purgeSession(h.session_id);
+                                        } else {
+                                            setConfirmId(h.session_id);
+                                            setTimeout(() => setConfirmId((c) => (c === h.session_id ? null : c)), 4000);
+                                        }
+                                    }}
+                                    className="flex items-center gap-1 rounded-lg border px-2.5 py-1 text-[11px] transition-colors hover:opacity-75"
+                                    style={{
+                                        borderColor: confirmId === h.session_id ? "var(--zc-danger)" : "var(--zc-border-strong)",
+                                        color: confirmId === h.session_id ? "var(--zc-danger)" : "var(--zc-text-3)",
+                                    }}
+                                >
+                                    <Trash2 size={11} />
+                                    {confirmId === h.session_id ? "再点一次确认" : "彻底删除"}
+                                </button>
+                            </>
+                        ) : (
+                            <span className="text-[10px]" style={{ color: "var(--zc-text-3)" }}>
+                                在系统回收站
+                            </span>
                         )}
                     </motion.li>
                 ))}

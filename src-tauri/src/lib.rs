@@ -68,6 +68,7 @@ pub fn run() {
             cancel_scan,
             clean_selected,
             undo_session,
+            purge_session,
             rules_meta,
             history_list,
             drives_overview,
@@ -86,6 +87,18 @@ pub fn run() {
             dism_component_cleanup,
             create_restore_point
         ])
+        .setup(|_app| {
+            // vault 7 天后悔期到期自动清扫：启动即后台执行，绝不阻塞窗口；
+            // 结果只进日志，不打扰用户（被占用批次保留，下次启动再扫）。
+            tauri::async_runtime::spawn_blocking(|| match zc_core::executor::vault::sweep_expired(7) {
+                Ok(s) if s.sessions > 0 => {
+                    eprintln!("[vault-sweep] 清扫 {} 个过期批次，{} 项 / {}", s.sessions, s.items, human_bytes(s.bytes));
+                }
+                Ok(_) => {}
+                Err(e) => eprintln!("[vault-sweep] 失败：{e}"),
+            });
+            Ok(())
+        })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
@@ -227,6 +240,45 @@ async fn undo_session(id: String) -> Result<String, String> {
     .map_err(|_| "撤销后台任务失败".to_string())?
 }
 
+/// 彻底删除一批 vault 副本，把「7 天后悔期」之后的空间真正还回来。
+/// spawn_blocking 执行——整批删除可达数十万文件，绝不上主线程。
+#[tauri::command]
+async fn purge_session(id: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let m = manifest::CleanManifest::load(&id).map_err(|e| e.to_string())?;
+        let (deleted, freed, failed) = m.purge_forever().map_err(|e| e.to_string())?;
+        if failed.is_empty() {
+            Ok(format!(
+                "已彻底删除 {deleted} 项，实际释放 {}（台账已抹除，本批不可再还原）",
+                human_bytes(freed)
+            ))
+        } else {
+            Ok(format!(
+                "已删除 {deleted} 项，{} 项未能删除（多为文件被占用；首个原因：{}）。台账保留，可稍后重试或照常还原",
+                failed.len(),
+                failed[0].1
+            ))
+        }
+    })
+    .await
+    .map_err(|_| "彻底删除后台任务失败".to_string())?
+}
+
+fn human_bytes(n: u64) -> String {
+    const U: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
+    let mut v = n as f64;
+    let mut i = 0;
+    while v >= 1024.0 && i < U.len() - 1 {
+        v /= 1024.0;
+        i += 1;
+    }
+    if i == 0 {
+        format!("{n} B")
+    } else {
+        format!("{v:.2} {}", U[i])
+    }
+}
+
 #[derive(Serialize)]
 struct DriveDto {
     label: String,
@@ -234,7 +286,7 @@ struct DriveDto {
     free_bytes: u64,
 }
 
-/// 已挂载盘符容量总览。用 GetLogicalDrivesW 先拿真实存在的盘符位图，
+/// 已挂载盘符容量总览。用 GetLogicalDrives() 先拿真实存在的盘符位图，
 /// 只查询存在的盘（绝不裸探 A-Z，避免空光驱/残网络映射卡住）；
 /// spawn_blocking 执行，不占主线程。
 #[tauri::command]

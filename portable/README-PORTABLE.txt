@@ -1,4 +1,4 @@
-ZDiskCleanerPro v3.0.0 绿色便携版
+ZDiskCleanerPro v3.0.4 绿色便携版
 ====================================
 
 【启动方式】
@@ -12,7 +12,7 @@ ZDiskCleanerPro v3.0.0 绿色便携版
 
 【数据存放位置】
   台账/暂存区/历史记录默认写在：
-    %LOCALAPPDATA%\com.zdiskcleaner.pro\
+    %LOCALAPPDATA%\ZDiskCleanerPro3\
   想改成 U 盘等自定义位置，可在启动前设置环境变量 ZC_DATA_DIR 指向目标目录。
 
 【关于提权】
@@ -25,4 +25,4 @@ ZDiskCleanerPro v3.0.0 绿色便携版
 
 【与安装版的关系】
   两者功能完全一致，可共存。安装版（NSIS）提供开始菜单/卸载入口：
-  https://github.com/YushengBeep/ZDiskCleanerPro/releases/latest
+  https://github.com/yusheng266186-beep/zdisk-cleaner-pro/releases/latest

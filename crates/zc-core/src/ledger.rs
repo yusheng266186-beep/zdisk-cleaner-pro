@@ -231,6 +231,95 @@ impl LedgerStore {
         })
     }
 
+    /// 彻底删除后调用：抹去某批次的 manifests+entries 行，
+    /// 之后 [`crate::manifest::CleanManifest::load`] 会如实报「台账不存在」。
+    /// history 表行保留——搬运量是已发生的历史事实，不随彻底删除消失。
+    pub fn drop_manifest(&self, id: &str) -> io::Result<bool> {
+        let n = self
+            .conn
+            .execute("DELETE FROM entries WHERE manifest_id = ?1", [id])
+            .map_err(sqlite_io)?;
+        let m = self
+            .conn
+            .execute("DELETE FROM manifests WHERE id = ?1", [id])
+            .map_err(sqlite_io)?;
+        Ok(n > 0 || m > 0)
+    }
+
+    /// 过期 vault 批次（仅 vault 模式且 created_unix 早于 cutoff）。
+    /// 返回 (批次 id, 记录总字节, (origin, vault_rel, size) 列表)。
+    pub fn expired_vault_batches(
+        &self,
+        cutoff_unix: i64,
+    ) -> io::Result<Vec<(String, u64, Vec<(String, String, u64)>)>> {
+        let mut out = Vec::new();
+        let ids: Vec<String> = {
+            let mut st = self
+                .conn
+                .prepare(
+                    "SELECT id FROM manifests WHERE mode = 'vault' AND created_unix < ?1 ORDER BY created_unix",
+                )
+                .map_err(sqlite_io)?;
+            let rows = st
+                .query_map([cutoff_unix], |r| r.get::<_, String>(0))
+                .map_err(sqlite_io)?;
+            rows.filter_map(|r| r.ok()).collect()
+        };
+        for id in ids {
+            let mut st = self
+                .conn
+                .prepare(
+                    "SELECT origin, vault_rel, size FROM entries WHERE manifest_id = ?1 ORDER BY rowid",
+                )
+                .map_err(sqlite_io)?;
+            let rows = st
+                .query_map([&id], |r| {
+                    Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?))
+                })
+                .map_err(sqlite_io)?;
+            let mut copies = Vec::new();
+            let mut total: u64 = 0;
+            for r in rows.filter_map(|r| r.ok()) {
+                total += r.2.max(0) as u64;
+                copies.push((r.0, r.1, r.2.max(0) as u64));
+            }
+            out.push((id, total, copies));
+        }
+        Ok(out)
+    }
+
+    /// 仍存在于台账中的批次 id(孤儿 vault 会话目录 GC 用:不在名单内的目录可安全移除)。
+    pub fn live_manifest_ids(&self) -> Vec<String> {
+        match self.conn.prepare("SELECT id FROM manifests") {
+            Ok(mut st) => st
+                .query_map([], |r| r.get::<_, String>(0))
+                .map(|rows| rows.filter_map(|r| r.ok()).collect())
+                .unwrap_or_default(),
+            Err(_) => Vec::new(),
+        }
+    }
+
+    /// 批次条目三元组 `(origin, vault_rel, size)`，按台账插入原序返回。
+    /// 彻底删除与过期清扫共用：size 取台账记录值，删除后无需再量。
+    pub fn vault_copies(&self, id: &str) -> Vec<(String, String, u64)> {
+        match self
+            .conn
+            .prepare("SELECT origin, vault_rel, size FROM entries WHERE manifest_id = ?1 ORDER BY rowid")
+        {
+            Ok(mut st) => st
+                .query_map([id], |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, i64>(2)?.max(0) as u64,
+                    ))
+                })
+                .map(|rows| rows.filter_map(|r| r.ok()).collect())
+                .unwrap_or_default(),
+            Err(_) => Vec::new(),
+        }
+    }
+
     /// 还原用条目对 `(origin, vault_rel)`，按台账插入原序返回。
     pub fn undo_entries(&self, id: &str) -> Vec<(String, String)> {
         match self

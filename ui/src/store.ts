@@ -19,6 +19,7 @@ export type Page = "home" | "results" | "history" | "tools" | "deeptools" | "sta
 interface StoreState {
     demo: boolean;
     version: string;
+    appVersion: string;
     theme: "dark" | "light";
 
     activePage: Page;
@@ -52,7 +53,9 @@ interface StoreState {
     selectSafeOnly: () => void;
     clearSelection: () => void;
     cleanSelected: (mode: "vault" | "recycle_bin") => Promise<void>;
+    undoSession: (id: string) => Promise<void>;
     undoLast: () => Promise<void>;
+    purgeSession: (id: string) => Promise<void>;
     setExpanded: (id: string | null) => void;
     togglePalette: (open?: boolean) => void;
     toast: (kind: Toast["kind"], msg: string) => void;
@@ -63,6 +66,7 @@ let toastSeq = 1;
 export const useStore = create<StoreState>((set, get) => ({
     demo: !ipc.isDesktop(),
     version: "",
+    appVersion: "",
     theme: (localStorage.getItem("zc-theme") as "dark" | null) ?? "dark",
 
     activePage: "home",
@@ -86,13 +90,14 @@ export const useStore = create<StoreState>((set, get) => ({
 
     async init() {
         document.documentElement.dataset.theme = get().theme;
-        const [version, rules, drives, history] = await Promise.all([
+        const [version, appVer, rules, drives, history] = await Promise.all([
             ipc.coreVersion(),
+            ipc.appVersion(),
             ipc.loadRuleMeta(),
             ipc.listDrives(),
             ipc.loadHistory(),
         ]);
-        set({ version, rules, drives, history });
+        set({ version, appVersion: appVer, rules, drives, history });
         if (!ipc.isDesktop()) return;
     },
 
@@ -167,7 +172,10 @@ export const useStore = create<StoreState>((set, get) => ({
                 new Promise((r) => setTimeout(r, 1200)),
             ]);
             const histEntry: HistoryRecord = {
-                session_id: `${outcome.requested_files}-${Date.now()}`,
+                // 真实台账 ID(report.id):历史页的还原/彻底删除按钮按它调后端。
+                // 后端 clean_selected 已用同一 ID 写过台账 history 行,这里 upsert 同一行;
+                // 此前的 `${files}-${Date.now()}` 假 ID 会让第一行的还原/彻底删除永远报「台账不存在」。
+                session_id: report.id,
                 created_unix: Date.now() / 1000,
                 mode,
                 files: outcome.done_files,
@@ -191,18 +199,33 @@ export const useStore = create<StoreState>((set, get) => ({
         }
     },
 
-    async undoLast() {
-        const id = get().lastSessionId;
-        if (!id) {
-            get().toast("warn", "没有可还原的批次");
-            return;
-        }
+    async undoSession(id: string) {
         try {
             const msg = await ipc.undoSession(id);
             set({ cleanOutcome: null });
             get().toast("ok", msg);
         } catch (e) {
             get().toast("err", `还原失败：${e instanceof Error ? e.message : String(e)}`);
+        }
+    },
+
+    async undoLast() {
+        const id = get().lastSessionId;
+        if (!id) {
+            get().toast("warn", "没有可还原的批次");
+            return;
+        }
+        return get().undoSession(id);
+    },
+
+    /** 彻底删除某 vault 批次副本：7 天后悔期内也可主动放弃后悔、立即释放空间。 */
+    async purgeSession(id: string) {
+        try {
+            const msg = await ipc.purgeSession(id);
+            set({ cleanOutcome: null });
+            get().toast("ok", msg);
+        } catch (e) {
+            get().toast("err", `彻底删除失败：${e instanceof Error ? e.message : String(e)}`);
         }
     },
 
@@ -237,3 +260,6 @@ export function cleanableBytes(rep: ScanReport): number {
 export function selectableFindings(report: ScanReport | null) {
     return (report?.findings ?? []).filter((f) => totalHits(f) > 0);
 }
+
+/** 调试/QA 句柄：CDP 驱动与自动化测试用（只读语义，勿在业务代码里绕过 hooks 直接操作）。 */
+(window as unknown as { __zcStore?: unknown }).__zcStore = useStore;
