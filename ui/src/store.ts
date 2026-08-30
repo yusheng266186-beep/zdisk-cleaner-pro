@@ -160,26 +160,35 @@ export const useStore = create<StoreState>((set, get) => ({
             return;
         }
         set({ phase: "cleaning" });
-        // 交互节奏：先让执行页动画跑起来（1.2s），再等待真实/演示结果
-        const [outcome] = await Promise.all([
-            ipc.cleanSelected(report, [...selection], mode),
-            new Promise((r) => setTimeout(r, 1200)),
-        ]);
-        const histEntry: HistoryRecord = {
-            session_id: `${outcome.requested_files}-${Date.now()}`,
-            created_unix: Date.now() / 1000,
-            mode,
-            files: outcome.done_files,
-            bytes_moved: outcome.done_bytes,
-        };
-        set({
-            phase: "idle",
-            cleanOutcome: outcome,
-            lastSessionId: report.id,
-            history: [histEntry, ...get().history],
-            selection: new Set(),
-        });
-        get().toast(outcome.failed.length ? "warn" : "ok", outcome.semantics_note);
+        try {
+            // 交互节奏：先让执行页动画跑起来（1.2s），再等待真实/演示结果
+            const [outcome] = await Promise.all([
+                ipc.cleanSelected(report, [...selection], mode),
+                new Promise((r) => setTimeout(r, 1200)),
+            ]);
+            const histEntry: HistoryRecord = {
+                session_id: `${outcome.requested_files}-${Date.now()}`,
+                created_unix: Date.now() / 1000,
+                mode,
+                files: outcome.done_files,
+                bytes_moved: outcome.done_bytes,
+            };
+            set({
+                phase: "idle",
+                // 结果页此刻已过期（文件已搬走）：清掉并回体检台看完成战报
+                report: null,
+                cleanOutcome: outcome,
+                lastSessionId: report.id,
+                history: [histEntry, ...get().history],
+                selection: new Set(),
+                activePage: "home",
+            });
+            get().toast(outcome.failed.length ? "warn" : "ok", outcome.semantics_note);
+        } catch (e) {
+            // 失败绝不能把执行遮罩卡死：退回结果页并把原因亮出来
+            set({ phase: get().report ? "results" : "idle" });
+            get().toast("err", `清理失败：${e instanceof Error ? e.message : String(e)}`);
+        }
     },
 
     async undoLast() {
@@ -188,9 +197,13 @@ export const useStore = create<StoreState>((set, get) => ({
             get().toast("warn", "没有可还原的批次");
             return;
         }
-        const msg = await ipc.undoSession(id);
-        set({ cleanOutcome: null });
-        get().toast("ok", msg);
+        try {
+            const msg = await ipc.undoSession(id);
+            set({ cleanOutcome: null });
+            get().toast("ok", msg);
+        } catch (e) {
+            get().toast("err", `还原失败：${e instanceof Error ? e.message : String(e)}`);
+        }
     },
 
     setActivePage: (p) => set({ activePage: p }),

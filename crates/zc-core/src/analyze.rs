@@ -20,7 +20,8 @@ pub struct TreeNode {
     pub size: u64,
     pub files: u64,
     pub dirs: u64,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    /// 恒定输出（叶子为 []）：前端类型契约依赖该字段始终存在，
+    /// 省略空数组会让 JS 端读 undefined 崩掉整棵 React 树（v3.0.1 黑屏根因）。
     pub children: Vec<TreeNode>,
 }
 

@@ -35,7 +35,7 @@ export function Home() {
                         <div className="flex items-center gap-2 text-sm">
                             <ShieldCheck size={16} style={{ color: "var(--zc-ok)" }} />
                             <span>
-                                本次已处理 <b>{cleanOutcome.done_files}</b> 项 ·{" "}
+                                本次已搬运 <b>{cleanOutcome.done_files}</b> 项（整目录计 1 项） ·{" "}
                                 <RollNumber value={cleanOutcome.done_bytes} />
                             </span>
                         </div>

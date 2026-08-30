@@ -15,6 +15,7 @@ import { MigrateCenter } from "./pages/MigrateCenter";
 import { CleaningOverlay } from "./pages/CleaningOverlay";
 import { ToastStack } from "./components/ToastStack";
 import { CommandPalette } from "./components/CommandPalette";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 import { springSnappy } from "./lib/motion";
 import { useStore, type Page } from "./store";
 
@@ -63,7 +64,7 @@ export default function App() {
                         <div>
                             <div className="text-sm font-semibold">ZDiskCleaner Pro</div>
                             <div className="text-[10px]" style={{ color: "var(--zc-text-3)" }}>
-                                v3.0.1 · core {version || "…"}
+                                v3.0.2 · core {version || "…"}
                             </div>
                         </div>
                     </div>
@@ -111,6 +112,7 @@ export default function App() {
 
                 {/* ── 内容 ── */}
                 <main className="min-w-0 flex-1 overflow-auto p-8">
+                    <ErrorBoundary>
                     <AnimatePresence mode="wait">
                         {page === "home" && <Home key="home" />}
                         {page === "results" && <Results key="results" />}
@@ -124,6 +126,7 @@ export default function App() {
                         {page === "dupes" && <Duplicates key="dupes" />}
                         {page === "settings" && <SettingsPage key="settings" />}
                     </AnimatePresence>
+                    </ErrorBoundary>
                 </main>
 
                 <CleaningOverlay />

@@ -52,7 +52,7 @@ export function History() {
                         )}
                         <span className="flex-1 text-sm">
                             {humanSize(h.bytes_moved)}
-                            <span style={{ color: "var(--zc-text-3)" }}> · {h.files.toLocaleString("en-US")} 项</span>
+                            <span style={{ color: "var(--zc-text-3)" }}> · 搬运 {h.files.toLocaleString("en-US")} 项</span>
                         </span>
                         <span className="num text-xs" style={{ color: "var(--zc-text-3)" }}>{timeAgo(h.created_unix)}</span>
                         {h.session_id.startsWith("elev-") && (

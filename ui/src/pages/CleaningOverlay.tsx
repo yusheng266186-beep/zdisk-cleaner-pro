@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { useStore } from "../store";
 
@@ -13,7 +14,13 @@ export function CleaningOverlay() {
     const names = (report?.findings ?? [])
         .filter((f) => useStore.getState().selection.has(f.rule_id))
         .map((f) => rules.find((r) => r.id === f.rule_id)?.name_zh ?? f.rule_id);
-    const idx = Math.floor((Date.now() / 260) % Math.max(names.length, 1));
+    // 标签轮换必须有真实 tick：无定时器时组件不重渲，标签会冻在第一条
+    const [idx, setIdx] = useState(0);
+    useEffect(() => {
+        if (phase !== "cleaning" || names.length <= 1) return;
+        const t = setInterval(() => setIdx((i) => i + 1), 1400);
+        return () => clearInterval(t);
+    }, [phase, names.length]);
 
     return (
         <AnimatePresence>
@@ -41,7 +48,7 @@ export function CleaningOverlay() {
                                 borderRightColor: "var(--zc-accent-b)",
                             }}
                         />
-                        <div className="mt-5 text-base font-medium">正在安全搬运…</div>
+                        <div className="mt-5 text-base font-medium">正在安全搬运…（后台执行，可切走）</div>
                         <div className="num mt-1 h-5 text-xs" style={{ color: "var(--zc-text-3)" }}>
                             {names.length ? names[idx % names.length] : ""}
                         </div>
