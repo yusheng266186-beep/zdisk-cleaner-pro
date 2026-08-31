@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import { AnimatePresence, MotionConfig, motion } from "motion/react";
-import { Sparkle, HeartPulse, Wrench, History, Settings, Command, Radar, Rocket, FolderOutput, FileSearch, Copy, ShieldCheck  } from "lucide-react";
+import { AlertTriangle, ClipboardCheck, Command, Copy, FileSearch, FolderOutput, HeartPulse, History, Radar, Rocket, Settings, ShieldCheck, Sparkle, Wrench, X } from "lucide-react";
 import { Home } from "./pages/Home";
 import { Results } from "./pages/Results";
 import { History as HistoryPage } from "./pages/History";
@@ -17,10 +17,12 @@ import { ToastStack } from "./components/ToastStack";
 import { CommandPalette } from "./components/CommandPalette";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { springSnappy } from "./lib/motion";
+import { MIGRATE_PHASE_LABEL, onMigratePhase } from "./lib/ipc";
 import { useStore, type Page } from "./store";
 
 const NAV: { id: Page; label: string; icon: typeof HeartPulse }[] = [
     { id: "home", label: "体检台", icon: HeartPulse },
+    { id: "results", label: "体检结果", icon: ClipboardCheck },
     { id: "history", label: "历史", icon: History },
     { id: "tools", label: "工具箱", icon: Wrench },
     { id: "deeptools", label: "深度工具", icon: ShieldCheck },
@@ -36,26 +38,49 @@ export default function App() {
     const version = useStore((s) => s.version);
     const appVer = useStore((s) => s.appVersion);
     const migrateActive = useStore((s) => s.migrateActive);
+    const migratePhase = useStore((s) => s.migratePhase);
+    const report = useStore((s) => s.report);
+    const initError = useStore((s) => s.initError);
     const init = useStore((s) => s.init);
+    const clearInitError = useStore((s) => s.clearInitError);
     // 页面路由提升进 store：雷达页「作为迁移源」等跨页跳转可复用 setActivePage
     const page = useStore((s) => s.activePage);
     const setPage = useStore((s) => s.setActivePage);
 
     useEffect(() => {
         void init();
+        // 迁移阶段事件全局订阅一次（v5：从 MigrateCenter 移出，切页不丢进度）
+        let alive = true;
+        let unlisten: (() => void) | undefined;
+        void onMigratePhase((e) => {
+            if (alive && useStore.getState().migrateActive) {
+                useStore.setState({ migratePhase: e });
+            }
+        }).then((off) => {
+            if (alive) unlisten = off;
+            else off();
+        });
         // 扫描结束后自动进入结果页
         const unsub = useStore.subscribe((s, prev) => {
             if (s.phase === "results" && prev?.phase !== "results") s.setActivePage("results");
         });
-        return unsub;
+        return () => {
+            alive = false;
+            unlisten?.();
+            unsub();
+        };
     }, [init]);
+
+    // Results 再入：report 存在即出现「体检结果」项（phase!==idle 时也可进）；
+    // 扫描后切走不再死胡同（v5 U1 修复）。
+    const navItems = report ? NAV : NAV.filter((n) => n.id !== "results");
 
     return (
         <MotionConfig reducedMotion="user">
             <div className="flex h-full">
                 {/* ── 侧栏 ── */}
                 <aside
-                    className="flex w-52 shrink-0 flex-col gap-0.5 border-r p-3"
+                    className="flex w-52 shrink-0 flex-col gap-0.5 overflow-y-auto border-r p-3"
                     style={{ background: "var(--zc-surface-1)", borderColor: "var(--zc-border)" }}
                 >
                     <div className="mb-4 flex items-center gap-2.5 px-2 pt-2">
@@ -88,14 +113,16 @@ export default function App() {
                         style={{ background: "var(--zc-hairline)" }}
                     />
 
-                    {NAV.map(({ id, label, icon: Icon }) => {
-                        const active = page === id || (id === "home" && page === "results");
+                <nav aria-label="主导航" className="contents">
+                    {navItems.map(({ id, label, icon: Icon }) => {
+                        const active = page === id;
                         return (
                             <button
                                 key={id}
+                                data-nav={id}
                                 onClick={() => setPage(id)}
-                                className="relative flex items-center gap-2.5 rounded-xl px-3 py-2 text-sm transition-colors hover:bg-white/4"
-                                style={{ color: active ? "var(--zc-text-1)" : "var(--zc-text-2)" }}
+                                className="zc-press relative flex items-center gap-2.5 rounded-xl px-3 py-2 text-sm transition-colors hover:bg-[var(--zc-hover)]"
+                                style={{ color: active ? "var(--zc-accent-text)" : "var(--zc-text-2)" }}
                             >
                                 {active && (
                                     <motion.span
@@ -108,12 +135,13 @@ export default function App() {
                                 <Icon
                                     size={15}
                                     className="relative z-10"
-                                    style={active ? { color: "var(--zc-accent-b)" } : undefined}
+                                    style={active ? { color: "var(--zc-accent-text)" } : undefined}
                                 />
                                 <span className="relative z-10">{label}</span>
                             </button>
                         );
                     })}
+                </nav>
 
                     <div className="mt-auto flex flex-col gap-2 px-2">
                         {migrateActive && (
@@ -132,12 +160,12 @@ export default function App() {
                                     className="h-2 w-2 shrink-0 rounded-full"
                                     style={{ background: "var(--zc-accent-b)" }}
                                 />
-                                迁移后台进行中…<span className="ml-auto text-[10px]" style={{ color: "var(--zc-text-3)" }}>查看</span>
+                                迁移后台进行中{migratePhase ? ` · ${MIGRATE_PHASE_LABEL[migratePhase.phase]}` : "…"}<span className="ml-auto text-[10px]" style={{ color: "var(--zc-text-3)" }}>查看</span>
                             </button>
                         )}
                         <button
                             onClick={() => useStore.getState().togglePalette(true)}
-                            className="flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-[11px] transition-colors hover:bg-white/5"
+                            className="flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-[11px] transition-colors hover:bg-[var(--zc-hover)]"
                             style={{ color: "var(--zc-text-3)" }}
                         >
                             <Command size={12} /> Ctrl+K 命令面板
@@ -150,20 +178,52 @@ export default function App() {
 
                 {/* ── 内容 ── */}
                 <main className="min-w-0 flex-1 overflow-auto p-8">
-                    <ErrorBoundary>
-                    <AnimatePresence mode="wait">
-                        {page === "home" && <Home key="home" />}
-                        {page === "results" && <Results key="results" />}
-                        {page === "history" && <HistoryPage key="history" />}
-                        {page === "tools" && <Tools key="tools" />}
-                        {page === "deeptools" && <DeepTools key="deeptools" />}
-                        {page === "startup" && <StartupManager key="startup" />}
-                        {page === "migrate" && <MigrateCenter key="migrate" />}
-                        {page === "radar" && <RadarPage key="radar" />}
-                        {page === "bigfiles" && <BigFiles key="bigfiles" />}
-                        {page === "dupes" && <Duplicates key="dupes" />}
-                        {page === "settings" && <SettingsPage key="settings" />}
-                    </AnimatePresence>
+                    {/* v5 U3：init 失败不再静默半残，亮横幅 + 重试 */}
+                    {initError && (
+                        <div
+                            data-testid="init-error"
+                            className="mx-auto mb-4 flex max-w-3xl items-center gap-3 rounded-xl border px-4 py-2.5"
+                            style={{
+                                background: "color-mix(in srgb, var(--zc-warn) 10%, var(--zc-surface-1))",
+                                borderColor: "color-mix(in srgb, var(--zc-warn) 35%, transparent)",
+                            }}
+                        >
+                            <AlertTriangle size={15} className="shrink-0" style={{ color: "var(--zc-warn)" }} />
+                            <span className="min-w-0 flex-1 text-xs" style={{ color: "var(--zc-text-1)" }}>
+                                初始化失败：{initError} —— 部分数据可能缺失，恢复后全部功能可用
+                            </span>
+                            <button
+                                onClick={() => void init()}
+                                className="zc-press shrink-0 rounded-lg border px-3 py-1 text-xs transition-colors hover:opacity-80"
+                                style={{ borderColor: "var(--zc-border-strong)", color: "var(--zc-accent-text)" }}
+                            >
+                                重试
+                            </button>
+                            <button
+                                onClick={clearInitError}
+                                aria-label="关闭提示"
+                                className="shrink-0 rounded-lg p-1 transition-colors hover:opacity-70"
+                                style={{ color: "var(--zc-text-3)" }}
+                            >
+                                <X size={13} />
+                            </button>
+                        </div>
+                    )}
+                    {/* key={page}：崩溃边界随切页复位，一页崩一次不再全站崩（v5 U5） */}
+                    <ErrorBoundary key={page}>
+                        <AnimatePresence mode="wait">
+                            {page === "home" && <Home key="home" />}
+                            {page === "results" && <Results key="results" />}
+                            {page === "history" && <HistoryPage key="history" />}
+                            {page === "tools" && <Tools key="tools" />}
+                            {page === "deeptools" && <DeepTools key="deeptools" />}
+                            {page === "startup" && <StartupManager key="startup" />}
+                            {page === "migrate" && <MigrateCenter key="migrate" />}
+                            {page === "radar" && <RadarPage key="radar" />}
+                            {page === "bigfiles" && <BigFiles key="bigfiles" />}
+                            {page === "dupes" && <Duplicates key="dupes" />}
+                            {page === "settings" && <SettingsPage key="settings" />}
+                        </AnimatePresence>
                     </ErrorBoundary>
                 </main>
 

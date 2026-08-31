@@ -14,3 +14,8 @@ zc-core = { path = "../zc-core" }
 zc-rules = { path = "../zc-rules" }
 serde = { workspace = true }
 serde_json = { workspace = true }
+# 提权 worker 死亡检测（OpenProcess/GetExitCodeProcess，审计 T4-③）
+windows-sys = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

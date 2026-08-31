@@ -1,15 +1,23 @@
 import { useCallback, useEffect, useState } from "react";
-import { Camera, CheckCircle2, Copy, Eraser, HardDrive, ShieldCheck } from "lucide-react";
+import type { KeyboardEvent } from "react";
+import { Camera, CheckCircle2, Copy, Eraser, HardDrive, RefreshCcw, ShieldCheck } from "lucide-react";
 import { motion } from "motion/react";
 import { cascade, pageVariants, springSnappy } from "../lib/motion";
 import type { OccupancyItem } from "../lib/ipc";
 import * as ipc from "../lib/ipc";
 import { humanSize } from "../lib/format";
 import { useStore } from "../store";
+import { useArm } from "./useArmEsc";
+
+/** 深度工具：三张能力卡。口径：要么走官方通道，要么只给指引——绝不野删系统文件。
+ *  v5：错误分类统一走 errCode(e)==='admin_required'（废弃中文子串匹配）；
+ *  DISM 执行前两段式确认；占用盘点失败亮错误态 + 重试（不再伪装空结果）。 */
 
 const msgOf = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
-/** 深度工具：三张能力卡。口径：要么走官方通道，要么只给指引——绝不野删系统文件。 */
+const isAdminError = (e: unknown) => ipc.errCode(e) === "admin_required";
+const ADMIN_GUIDE = "请以管理员重启应用，或在 CLI 用 zclean apply --admin 流程";
+
 export function DeepTools() {
     const toast = useStore((s) => s.toast);
 
@@ -40,13 +48,16 @@ type DismState = "idle" | "running" | "done" | "error";
 function DismCard({ toast }: { toast: (kind: "ok" | "warn" | "err" | "info", msg: string) => void }) {
     const [state, setState] = useState<DismState>("idle");
     const [pct, setPct] = useState(0);
-    const [errMsg, setErrMsg] = useState<string | null>(null);
+    const [err, setErr] = useState<unknown>(null);
+    // v5：执行前两段式确认（不可逆的系统级操作，全站一致）
+    const { armed, arm, disarm } = useArm(4000);
 
     async function start() {
         if (state === "running") return;
+        disarm();
         setState("running");
         setPct(0);
-        setErrMsg(null);
+        setErr(null);
         let unlisten: (() => void) | undefined;
         try {
             // 先订阅真实百分比（dism://progress），再发起清理
@@ -56,17 +67,22 @@ function DismCard({ toast }: { toast: (kind: "ok" | "warn" | "err" | "info", msg
             setState("done");
             toast("ok", "WinSxS 组件清理完成");
         } catch (e) {
-            const msg = msgOf(e);
-            setErrMsg(msg);
+            setErr(e);
             setState("error");
-            if (msg.includes("需要管理员")) {
-                toast("warn", "需要管理员权限：请以管理员重启应用，或在 CLI 用 zclean apply --admin 流程");
+            if (isAdminError(e)) {
+                toast("warn", `需要管理员权限：${ADMIN_GUIDE}`);
             } else {
-                toast("err", `组件清理失败：${msg}`);
+                toast("err", `组件清理失败：${msgOf(e)}`);
             }
         } finally {
             unlisten?.();
         }
+    }
+
+    function onClickRun() {
+        if (state === "running") return;
+        if (armed) void start();
+        else arm();
     }
 
     return (
@@ -82,7 +98,8 @@ function DismCard({ toast }: { toast: (kind: "ok" | "warn" | "err" | "info", msg
                         <span>DISM /StartComponentCleanup 执行中…</span>
                         <span className="num">{pct}%</span>
                     </div>
-                    <div className="mt-1.5 h-2 overflow-hidden rounded-full" >
+                    {/* 轨道加底色，读数才有参照 */}
+                    <div className="mt-1.5 h-2 overflow-hidden rounded-full" style={{ background: "var(--zc-surface-3)" }}>
                         <motion.div
                             className="h-full rounded-full"
                             style={{ background: "linear-gradient(135deg,var(--zc-accent-a),var(--zc-accent-b))" }}
@@ -103,25 +120,23 @@ function DismCard({ toast }: { toast: (kind: "ok" | "warn" | "err" | "info", msg
                 </div>
             )}
 
-            {state === "error" && errMsg && (
+            {state === "error" && err !== null && (
                 <div className="mt-3 rounded-lg border px-3 py-2 text-xs" style={{ borderColor: "var(--zc-border-strong)", background: "var(--zc-surface-2)", color: "var(--zc-warn)" }}>
-                    {errMsg.includes("需要管理员")
-                        ? "请以管理员重启应用，或在 CLI 用 zclean apply --admin 流程"
-                        : `清理失败：${errMsg}`}
+                    {isAdminError(err) ? ADMIN_GUIDE : `清理失败：${msgOf(err)}`}
                 </div>
             )}
 
             <button
-                onClick={() => void start()}
+                onClick={onClickRun}
                 disabled={state === "running"}
-                className="mt-4 rounded-lg border px-4 py-2 text-sm font-medium transition-transform active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
+                className="zc-press mt-4 rounded-lg border px-4 py-2 text-sm font-medium transition-transform active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
                 style={{
-                    borderColor: state === "running" ? "var(--zc-border)" : "color-mix(in srgb, var(--zc-accent-b) 45%, transparent)",
-                    color: "var(--zc-accent-b)",
-                    background: state === "running" ? "transparent" : "color-mix(in srgb, var(--zc-accent-b) 10%, transparent)",
+                    borderColor: armed ? "var(--zc-danger)" : state === "running" ? "var(--zc-border)" : "color-mix(in srgb, var(--zc-accent-b) 45%, transparent)",
+                    color: armed ? "var(--zc-danger-text)" : "var(--zc-accent-text)",
+                    background: state === "running" ? "transparent" : armed ? "color-mix(in srgb, var(--zc-danger) 12%, transparent)" : "color-mix(in srgb, var(--zc-accent-b) 10%, transparent)",
                 }}
             >
-                {state === "running" ? "清理中…" : state === "done" ? "再次清理" : "开始清理"}
+                {state === "running" ? "清理中…" : armed ? "再点一次确认开始清理" : state === "done" ? "再次清理" : "开始清理"}
             </button>
         </Card>
     );
@@ -150,15 +165,18 @@ function RestorePointCard({ toast }: { toast: (kind: "ok" | "warn" | "err" | "in
             setResult(`已创建还原点「${desc.trim()}」——可在 系统属性→系统保护 中查看`);
             toast("ok", "还原点创建成功");
         } catch (e) {
-            const msg = msgOf(e);
             setState("err");
             setResult(
-                msg.includes("需要管理员")
-                    ? "请以管理员重启应用，或在 CLI 用 zclean apply --admin 流程"
-                    : `创建失败：${msg}`,
+                isAdminError(e)
+                    ? ADMIN_GUIDE
+                    : `创建失败：${msgOf(e)}`,
             );
-            toast("err", `还原点创建失败：${msg}`);
+            toast("err", `还原点创建失败：${msgOf(e)}`);
         }
+    }
+
+    function onKey(e: KeyboardEvent) {
+        if (e.key === "Enter") void create();
     }
 
     return (
@@ -169,7 +187,8 @@ function RestorePointCard({ toast }: { toast: (kind: "ok" | "warn" | "err" | "in
             <input
                 value={desc}
                 onChange={(e) => setDesc(e.target.value)}
-                placeholder="还原点描述，例如：清理 C 盘前快照"
+                onKeyDown={onKey}
+                placeholder="还原点描述，例如：清理 C 盘前快照（Enter 创建）"
                 maxLength={80}
                 className="mt-3 w-full rounded-lg border px-3 py-2 text-sm outline-none transition-colors focus:border-[var(--zc-accent-b)]"
                 style={{ background: "var(--zc-surface-2)", borderColor: "var(--zc-border-strong)", color: "var(--zc-text-1)" }}
@@ -189,10 +208,10 @@ function RestorePointCard({ toast }: { toast: (kind: "ok" | "warn" | "err" | "in
             <button
                 onClick={() => void create()}
                 disabled={state === "running"}
-                className="mt-4 rounded-lg border px-4 py-2 text-sm font-medium transition-transform active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
+                className="zc-press mt-4 rounded-lg border px-4 py-2 text-sm font-medium transition-transform active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
                 style={{
                     borderColor: state === "running" ? "var(--zc-border)" : "color-mix(in srgb, var(--zc-accent-b) 45%, transparent)",
-                    color: "var(--zc-accent-b)",
+                    color: "var(--zc-accent-text)",
                     background: state === "running" ? "transparent" : "color-mix(in srgb, var(--zc-accent-b) 10%, transparent)",
                 }}
             >
@@ -206,12 +225,16 @@ function RestorePointCard({ toast }: { toast: (kind: "ok" | "warn" | "err" | "in
 
 function OccupancyCard({ toast }: { toast: (kind: "ok" | "warn" | "err" | "info", msg: string) => void }) {
     const [items, setItems] = useState<OccupancyItem[] | null>(null);
+    // v5：失败如实亮错误 + 手动重试按钮，不再 setItems([]) 伪装「没有盘点项」
+    const [error, setError] = useState<string | null>(null);
 
     const refresh = useCallback(async () => {
+        setError(null);
         try {
             setItems(await ipc.systemOccupancy());
         } catch (e) {
-            setItems([]);
+            setItems(null);
+            setError(msgOf(e));
             toast("err", `系统占用盘点失败：${msgOf(e)}`);
         }
     }, [toast]);
@@ -231,10 +254,39 @@ function OccupancyCard({ toast }: { toast: (kind: "ok" | "warn" | "err" | "info"
 
     return (
         <Card index={2} icon={HardDrive} title="系统级占用">
-            <p className="mt-2 text-xs leading-relaxed" style={{ color: "var(--zc-text-2)" }}>
-                系统级大文件只盘点不触碰：拿不到体积（ACL 拒绝）就诚实标「未知」，指引复制即走官方通道。
-            </p>
-            {items === null ? (
+            <div className="mt-2 flex items-start justify-between gap-3">
+                <p className="text-xs leading-relaxed" style={{ color: "var(--zc-text-2)" }}>
+                    系统级大文件只盘点不触碰：拿不到体积（ACL 拒绝）就诚实标「未知」，指引复制即走官方通道。
+                </p>
+                <button
+                    onClick={() => void refresh()}
+                    aria-label="重新盘点"
+                    title="重新盘点"
+                    className="zc-press flex shrink-0 items-center gap-1 rounded-lg border px-2.5 py-1 text-[11px] transition-colors hover:opacity-75"
+                    style={{ borderColor: "var(--zc-border-strong)", color: "var(--zc-text-2)" }}
+                >
+                    <RefreshCcw size={11} /> 重新盘点
+                </button>
+            </div>
+            {error ? (
+                <div
+                    className="mt-3 flex flex-wrap items-center gap-2 rounded-lg border px-3 py-2.5 text-xs"
+                    style={{
+                        background: "color-mix(in srgb, var(--zc-danger) 8%, var(--zc-surface-2))",
+                        borderColor: "color-mix(in srgb, var(--zc-danger) 30%, transparent)",
+                        color: "var(--zc-danger-text)",
+                    }}
+                >
+                    盘点失败：{error}
+                    <button
+                        onClick={() => void refresh()}
+                        className="zc-press rounded-lg border px-2.5 py-1 transition-colors hover:opacity-75"
+                        style={{ borderColor: "var(--zc-border-strong)", color: "var(--zc-text-2)" }}
+                    >
+                        重试
+                    </button>
+                </div>
+            ) : items === null ? (
                 <div className="mt-3 flex flex-col gap-2" aria-hidden>
                     {[0, 1, 2].map((i) => (
                         <div key={i} className="h-9 zc-shimmer rounded-lg"  />
@@ -268,7 +320,7 @@ function OccupancyCard({ toast }: { toast: (kind: "ok" | "warn" | "err" | "info"
                             </div>
                             <button
                                 onClick={() => void copyGuide(it.guide_zh)}
-                                className="flex shrink-0 items-center gap-1 rounded-lg border px-2.5 py-1 text-[11px] transition-colors hover:opacity-75"
+                                className="zc-press flex shrink-0 items-center gap-1 rounded-lg border px-2.5 py-1 text-[11px] transition-colors hover:opacity-75"
                                 style={{ borderColor: "var(--zc-border-strong)", color: "var(--zc-text-1)" }}
                             >
                                 <Copy size={11} /> 复制指引
@@ -303,7 +355,7 @@ function Card({
             style={{ background: "var(--zc-surface-1)", borderColor: "var(--zc-border)" }}
         >
             <div className="flex items-center gap-2">
-                <Icon size={17} style={{ color: "var(--zc-accent-b)" }} />
+                <Icon size={17} style={{ color: "var(--zc-accent-text)" }} />
                 <span className="font-medium">{title}</span>
             </div>
             {children}

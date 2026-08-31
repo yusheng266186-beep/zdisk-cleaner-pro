@@ -1,15 +1,23 @@
 //! `zclean` — headless CLI，是内核的第一消费者（UI 只是第二个）。
 //!
 //! 用法：
-//!   zclean scan [--json FILE]                 扫描内置规则，打印发现清单
+//!   zclean scan [--admin] [--json [FILE]]     扫描内置规则（--json 无 FILE 则报告走 stdout）
 //!   zclean apply REPORT.json --mode vault     按报告执行清理（trash|vault）
 //!   zclean undo SESSION-ID                    还原一次 vault 批次
+//!   zclean purge SESSION-ID                   彻底删除 vault 批次副本
+//!   zclean vault P1 [P2...]                   手动安全删除（守卫 + 暂存区 + 台账）
+//!   zclean sweep [--days N]                   清扫超过 N 天后悔期的 vault 批次
+//!   zclean bigfiles PATH [--top N] [--json]   大文件 Top-N
+//!   zclean dupes PATH [--min-mb N] [--json]   重复文件组
 //!   zclean show REPORT.json                   重放展示某次扫描结果
-//!   zclean rules                              列出全部规则与风险档位
-//!   zclean selftest                           端到端自检（临时树，零风险）
+//!   zclean rules [--md]                       规则列表 / Markdown 手册
+//!   zclean tree / startup / migrate / elevated-run   [内部/辅助] 见 `zclean` 帮助
+//!
+//! 退出码约定（v5，自动化可对账）：
+//!   0 全部成功 · 1 错误 · 2 部分失败（failed 清单非空）· 3 取消
 
 use std::io::Write as _;
-use std::path::{PathBuf, Path};
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use zc_core::{executor, history::HistoryRecord, manifest::CleanManifest, models::*, *};
 
@@ -21,23 +29,40 @@ fn main() -> ExitCode {
         Ok(code) => code,
         Err(e) => {
             eprintln!("错误: {e}");
-            ExitCode::FAILURE
+            // 取消与错误分道：3=取消，1=其余错误
+            if matches!(e, Error::Cancelled { .. }) {
+                ExitCode::from(3)
+            } else {
+                ExitCode::FAILURE
+            }
         }
     }
 }
 
-fn run(args: &[String]) -> zc_core::Result<ExitCode> {
+/// 退出码决策（纯函数，单测覆盖）：取消优先于部分失败。
+fn decide_exit_code(failed_len: usize, cancelled: bool) -> ExitCode {
+    if cancelled {
+        ExitCode::from(3)
+    } else if failed_len > 0 {
+        ExitCode::from(2)
+    } else {
+        ExitCode::SUCCESS
+    }
+}
+
+fn run(args: &[String]) -> Result<ExitCode> {
     match args.first().map(|s| s.as_str()) {
-        Some("scan") => cmd_scan(),
+        Some("scan") => cmd_scan(args),
         Some("apply") => cmd_apply(args),
         Some("undo") => cmd_undo(args),
         Some("purge") => cmd_purge(args),
         Some("vault") => cmd_vault(args),
-        Some("sweep") => cmd_sweep(),
+        Some("sweep") => cmd_sweep(args),
         Some("show") => cmd_show(args),
         Some("rules") => cmd_rules(args),
-        Some("elevated-run") => cmd_elevated_run(args),
+        Some("elevated-run") => Ok(cmd_elevated_run(args)),
         Some("tree") => cmd_tree(args),
+        Some("bigfiles") => cmd_bigfiles(args),
         Some("dupes") => cmd_dupes(args),
         Some("startup") => cmd_startup(args),
         Some("migrate") => cmd_migrate(args),
@@ -50,20 +75,33 @@ fn run(args: &[String]) -> zc_core::Result<ExitCode> {
 
 fn print_help() {
     println!(
-        "zclean v3 — ZDiskCleaner Pro headless 内核客户端
+        "zclean v{} — ZDiskCleaner Pro headless 内核客户端
+退出码: 0 全成 · 1 错误 · 2 部分失败(failed 非空) · 3 取消
 
 命令:
-  scan                        扫描并保存会话报告
+  scan [--admin] [--json [FILE]]
+                    扫描内置规则并保存会话报告；--admin 在提权终端纳入
+                    系统级规则；--json 输出机器可读报告（缺省写 stdout）
   apply REPORT --mode MODE    执行清理 (MODE=trash|vault)
           [--rules id1,id2]   显式规则（缺省=仅安全档）
-          [--admin]           需要管理员的规则走一次性 UAC 提权批
-  undo SESSION-ID             还原 vault 批次
-  purge SESSION-ID            彻底删除 vault 批次副本（真正释放空间，不可还原）
+          [--admin]           含管理员规则时必须携带：走一次性 UAC 提权批
+                              （未提权且未带 --admin 一律拒绝，不再静默剔除）
+  undo SESSION-ID             还原 vault 批次（部分失败 → exit 2）
+  purge SESSION-ID            彻底删除 vault 批次副本（部分失败 → exit 2）
   vault P1 [P2...]            手动安全删除：任意路径走守卫+暂存区+台账（可还原）
-  sweep                       清扫全部超过 7 天后悔期的 vault 批次
+  sweep [--days N]            清扫超过 N 天后悔期的 vault 批次（缺省 7）
+  bigfiles PATH [--top N] [--json]   大文件 Top-N（缺省 50 条，仅 ≥1MB）
+  dupes PATH [--min-mb N] [--json]   重复文件组（XXH3 内容级，缺省 ≥1MB）
   show REPORT                 展示历史报告
   rules [--md]                规则列表 / Markdown 手册
-  elevated-run --job SPEC     [内部] 提权 worker，由 run_elevated 拉起"
+
+内部/辅助命令:
+  tree PATH [--depth N] [--json]     [内部] 目录体积树（GUI 雷达调试）
+  startup list|disable|enable|enable-all
+                                     [内部] 启动项管家（GUI 同内核通道）
+  migrate plan|apply|undo            [内部] 存储迁移（GUI 迁移中心同通道）
+  elevated-run --job SPEC            [内部] 提权 worker，由 apply --admin 拉起",
+        env!("CARGO_PKG_VERSION")
     );
 }
 
@@ -85,25 +123,69 @@ fn load_report(path: &str) -> Result<ScanReport> {
     Ok(serde_json::from_str(&raw)?)
 }
 
-fn cmd_scan() -> Result<ExitCode> {
+/// 解析 `--json [FILE]`：返回 Some(Option(file))——无该 flag 为 None。
+/// 下一个 token 存在、不以 -- 开头、且此前未出现同类参数时视为文件路径。
+fn parse_json_flag(args: &[String], i: usize) -> (Option<Option<String>>, usize) {
+    match args.get(i + 1) {
+        Some(next) if !next.starts_with("--") => (Some(Some(next.clone())), i + 2),
+        _ => (Some(None), i + 1),
+    }
+}
+
+fn cmd_scan(args: &[String]) -> Result<ExitCode> {
+    let mut want_admin = false;
+    let mut json: Option<Option<String>> = None;
+    let mut i = 1;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--admin" => {
+                want_admin = true;
+                i += 1;
+            }
+            "--json" => {
+                let (v, n) = parse_json_flag(args, i);
+                json = v;
+                i = n;
+            }
+            other => return Err(Error::Other(format!("scan 未知参数 {other}"))),
+        }
+    }
     let admin = is_admin_probe();
+    if want_admin && !admin {
+        return Err(Error::AdminRequired {
+            reason: "scan --admin 需要在提权的终端中运行（右键「以管理员身份运行」后重试）；\
+                     不带 --admin 的扫描将自动跳过系统级管理员规则"
+                .into(),
+        });
+    }
+    let say = |s: String| {
+        if json.is_none() {
+            println!("{s}");
+        }
+    };
     if !admin {
-        println!("· 未检测到管理员权限：管理员规则已跳过");
+        say("· 未检测到管理员权限：管理员规则已跳过".into());
     }
 
-    let pairs: Vec<(String, String)> = zc_rules::expand_all()
-        .into_iter()
-        .filter(|(id, _)| admin || !zc_rules::find(id).is_some_and(|r| r.admin_required))
-        .collect();
-    let rule_count = pairs.iter().map(|(id, _)| id.as_str()).collect::<std::collections::BTreeSet<_>>().len();
-    println!("启用规则 {rule_count} 条");
+    // v5：expand_all_with_opts 携带规则级 min_age_days，扫描端按 mtime 过滤
+    let keep = |id: &str| admin || !zc_rules::find(id).is_some_and(|r| r.admin_required);
+    let (all_pairs, all_ages) = zc_rules::expand_all_with_opts();
+    let pairs: Vec<(String, String)> = all_pairs.into_iter().filter(|(id, _)| keep(id)).collect();
+    let ages: std::collections::BTreeMap<String, u64> =
+        all_ages.into_iter().filter(|(id, _)| keep(id)).collect();
+    let rule_count = pairs
+        .iter()
+        .map(|(id, _)| id.as_str())
+        .collect::<std::collections::BTreeSet<_>>()
+        .len();
+    say(format!("启用规则 {rule_count} 条"));
 
     let handle = ScanHandle::default();
     let t0 = std::time::Instant::now();
     let mut last_flush = std::time::Instant::now();
-    let mut rep = scanner::scan(&pairs, &handle, |ev| {
+    let mut rep = scanner::scan_with_opts(&pairs, &ages, &handle, |ev| {
         if let ScanEvent::Entry { files, bytes_seen } = ev {
-            if last_flush.elapsed().as_millis() > 250 {
+            if json.is_none() && last_flush.elapsed().as_millis() > 250 {
                 print!("\r扫描中… {:>9} 项 / {:<10}", files, human_size(bytes_seen));
                 let _ = std::io::stdout().flush();
                 last_flush = std::time::Instant::now();
@@ -111,28 +193,52 @@ fn cmd_scan() -> Result<ExitCode> {
         }
     })?;
     zc_rules::filter_guards(&mut rep.findings);
-    println!();
+    if json.is_none() {
+        println!();
+    }
+    if rep.cancelled {
+        return Err(Error::Cancelled { reason: "扫描被取消".into() });
+    }
 
     let saved = save_report(&rep)?;
-    println!(
-        "\n扫描完成 · 遍历 {} 文件 · 历时 {:.1}s",
-        format_number(rep.files_seen),
-        t0.elapsed().as_secs_f64()
-    );
-    print_findings(&rep);
-    println!(
-        "\n可清理合计: {} ({})",
-        human_size(rep.cleanable_bytes()),
-        format_number(rep.cleanable_count())
-    );
-    println!("报告已保存: {}", saved.display());
-    println!("执行清理:   zclean apply \"{}\" --mode vault", saved.display());
+    match json {
+        // 机器可读通道：报告全文进 FILE 或 stdout，人类输出全部闭嘴
+        Some(target) => {
+            let body = serde_json::to_vec_pretty(&rep)?;
+            match target {
+                Some(p) => std::fs::write(&p, &body)?,
+                None => {
+                    let mut so = std::io::stdout().lock();
+                    so.write_all(&body)?;
+                    so.write_all(b"\n")?;
+                }
+            }
+        }
+        None => {
+            println!(
+                "\n扫描完成 · 遍历 {} 文件 · 历时 {:.1}s",
+                format_number(rep.files_seen),
+                t0.elapsed().as_secs_f64()
+            );
+            print_findings(&rep);
+            println!(
+                "\n可清理合计: {} ({})",
+                human_size(rep.cleanable_bytes()),
+                format_number(rep.cleanable_count())
+            );
+            println!("报告已保存: {}", saved.display());
+            println!("执行清理:   zclean apply \"{}\" --mode vault", saved.display());
+        }
+    }
 
     // 基准脚本消费的机器可读行（与本地化文本解耦，规避管道编码差异）
     if std::env::var_os("ZC_BENCH").is_some() {
         println!(
             "[bench] files={} duration_ms={} cleanable_bytes={} cleanable_count={}",
-            rep.files_seen, rep.duration_ms, rep.cleanable_bytes(), rep.cleanable_count()
+            rep.files_seen,
+            rep.duration_ms,
+            rep.cleanable_bytes(),
+            rep.cleanable_count()
         );
     }
     Ok(ExitCode::SUCCESS)
@@ -158,7 +264,7 @@ fn format_number(n: u64) -> String {
     let b = s.as_bytes();
     let mut out = String::with_capacity(s.len() + s.len() / 3);
     for (i, c) in b.iter().enumerate() {
-        if i > 0 && (b.len() - i).is_multiple_of(3) {
+        if i > 0 && (b.len() - i) % 3 == 0 {
             out.push(',');
         }
         out.push(*c as char);
@@ -230,117 +336,167 @@ fn cmd_apply(args: &[String]) -> Result<ExitCode> {
         CleanMode::Vault => "vault 暂存区",
     };
 
-    // 拆分提权批：--admin 时把 admin_required 规则转给一次性 UAC worker
-    if include_admin && !is_admin_probe() {
+    let is_admin_rule = |id: &str| zc_rules::find(id).is_some_and(|r| r.admin_required);
+    let admin_sel: Vec<&String> = only.iter().filter(|id| is_admin_rule(id)).collect();
+
+    // v5：勾选含管理员规则且未提权 → 必须显式 --admin 走 UAC 批，
+    // 不再「自行剔除 admin 规则 + 提示」的静默降级分支（言行一致）。
+    if !admin_sel.is_empty() && !is_admin_probe() && !include_admin {
+        return Err(Error::AdminRequired {
+            reason: format!(
+                "勾选规则含 {} 条管理员规则（目标在系统禁删区），当前进程未提权。\
+                 请在提权终端重跑，或添加 --admin 走一次性 UAC 提权批",
+                admin_sel.len()
+            ),
+        });
+    }
+
+    let mut worker_err: Option<String> = None;
+    // --admin 且未提权：管理员规则拆分给一次性 UAC worker，其余本进程执行。
+    // （已提权时不拆分：内核 elevated guard 白名单自动生效，整批直接 apply。）
+    if include_admin && !is_admin_probe() && !admin_sel.is_empty() {
         let (user_rules, admin_rules): (Vec<String>, Vec<String>) =
-            only.clone().into_iter().partition(|id| {
-                !zc_rules::find(id).is_some_and(|r| r.admin_required)
-            });
-        if !admin_rules.is_empty() {
-            println!(
-                "◆ {} 条管理员规则 → 一次性 UAC 提权批（拒绝则跳过，不影响其余）",
-                admin_rules.len()
-            );
-            let spec = elevate::JobSpec {
-                id: format!("elev-{}", rep.id),
-                created_unix: now_unix(),
-                action: elevate::JobAction::CleanRules {
-                    report_path: path.clone(),
-                    rule_ids: admin_rules,
-                    mode,
-                },
-            };
-            match elevate::run_elevated(
-                &std::env::current_exe()?,
-                &spec,
-                std::time::Duration::from_secs(15 * 60),
-            ) {
-                Ok(res) if res.success => {
-                    if let Some(o) = res.outcome {
-                        println!("  ↳ 提权批完成: {} 项 / {}", o.done_files, human_size(o.done_bytes));
-                        history::append(&HistoryRecord {
-                            session_id: spec.id.clone(),
-                            created_unix: now_unix(),
-                            mode,
-                            files: o.done_files,
-                            bytes_moved: o.done_bytes,
-                        })?;
-                    }
+            only.clone().into_iter().partition(|id| !is_admin_rule(id));
+        println!(
+            "◆ {} 条管理员规则 → 一次性 UAC 提权批",
+            admin_rules.len()
+        );
+        let spec = elevate::JobSpec::new(
+            format!("elev-{}", rep.id),
+            elevate::JobAction::CleanRules {
+                report_path: path.clone(),
+                rule_ids: admin_rules,
+                mode,
+            },
+        );
+        match elevate::run_elevated(
+            &std::env::current_exe()?,
+            &spec,
+            std::time::Duration::from_secs(15 * 60),
+        ) {
+            Ok(res) if res.success => {
+                if let Some(o) = res.outcome {
+                    println!(
+                        "  ↳ 提权批完成: {} 项 / {}",
+                        o.done_files,
+                        human_size(o.done_bytes)
+                    );
+                    history::append(&HistoryRecord {
+                        session_id: spec.id.clone(),
+                        created_unix: now_unix(),
+                        mode,
+                        files: o.done_files,
+                        bytes_moved: o.done_bytes,
+                        kind: Some("elevated_batch".to_string()),
+                        ..Default::default()
+                    })?;
                 }
-                Ok(res) => eprintln!("  ↳ 提权批失败: {}", res.message),
-                Err(e) => eprintln!("  ↳ 跳过提权批: {e}"),
             }
+            Ok(res) => worker_err = Some(format!("提权批失败: {}", res.message)),
+            Err(e) => worker_err = Some(format!("提权批未完成: {e}")),
         }
         only = user_rules;
-    } else if !include_admin {
-        // 用户未要求提权：照旧剔除 admin 规则并提示
-        let had_admin = only
-            .iter()
-            .any(|id| zc_rules::find(id).is_some_and(|r| r.admin_required));
-        if had_admin {
-            println!("· 含管理员规则但未启用 --admin：已按用户态处理（添加 --admin 可走 UAC 批）");
-            only.retain(|id| !zc_rules::find(id).is_some_and(|r| r.admin_required));
-        }
     }
+
     println!(
         "模式: {mode_cn} · 计划批次 {} 条规则\n守卫校验中…",
         only.len()
     );
+    let mut code = ExitCode::SUCCESS;
+    if !only.is_empty() {
+        let outcome = executor::apply(&rep, &only, mode)?;
+        history::append(&HistoryRecord {
+            session_id: rep.id.clone(),
+            created_unix: now_unix(),
+            mode,
+            files: outcome.done_files,
+            bytes_moved: outcome.done_bytes,
+            kind: Some("clean".to_string()),
+            ..Default::default()
+        })?;
 
-    let outcome = executor::apply(&rep, &only, mode)?;
-    history::append(&HistoryRecord {
-        session_id: rep.id.clone(),
-        created_unix: now_unix(),
-        mode,
-        files: outcome.done_files,
-        bytes_moved: outcome.done_bytes,
-    })?;
-
-    println!(
-        "\n完成 {}/{} 项 · 计 {} (移入)",
-        outcome.done_files,
-        outcome.requested_files,
-        human_size(outcome.done_bytes)
-    );
-    if !outcome.failed.is_empty() {
-        println!("失败 {} 项：", outcome.failed.len());
-        for (p, e) in outcome.failed.iter().take(20) {
-            println!("  ✗ {p} — {e}");
+        println!(
+            "\n完成 {}/{} 项 · 计 {} (移入)",
+            outcome.done_files,
+            outcome.requested_files,
+            human_size(outcome.done_bytes)
+        );
+        if !outcome.failed.is_empty() {
+            println!("失败 {} 项：", outcome.failed.len());
+            for (p, e) in outcome.failed.iter().take(20) {
+                println!("  ✗ {p} — {e}");
+            }
         }
+        println!("\n▶ {}", outcome.semantics_note);
+        if mode == CleanMode::Vault {
+            println!("▶ 反悔通道: zclean undo {}", rep.id);
+        }
+        code = decide_exit_code(outcome.failed.len(), false);
+    } else {
+        println!("（本进程无用户态规则可执行——全部为提权批条目）");
     }
-    println!("\n▶ {}", outcome.semantics_note);
-    if mode == CleanMode::Vault {
-        println!("▶ 反悔通道: zclean undo {}", rep.id);
+    // 提权批出错：用户批的部分失败(2)不得掩盖真实错误 → 收敛到 1
+    if let Some(msg) = worker_err {
+        eprintln!("错误: {msg}");
+        code = ExitCode::FAILURE;
     }
-    Ok(ExitCode::SUCCESS)
+    Ok(code)
 }
 
-fn result_path_for(spec_path: &Path) -> PathBuf {
-    let s = spec_path.to_string_lossy();
-    PathBuf::from(s.replace(".spec.json", ".result.json"))
-}
-
-/// [内部] 提权 worker：加载 spec → 执行 → 回写结果文件。
-fn cmd_elevated_run(args: &[String]) -> Result<ExitCode> {
-    let job = args
+/// [内部] 提权 worker：外层 catch_unwind 兜底（审计 T4-③：worker panic
+/// 则 launcher 干等 15 分钟）——任何阶段 panic 都回写 failed 结果文件；
+/// 结果经原子写（tmp+rename）落盘，200ms 轮询不再可能读到半截 JSON。
+fn cmd_elevated_run(args: &[String]) -> ExitCode {
+    let spec_path = match args
         .iter()
         .position(|a| a == "--job")
         .and_then(|i| args.get(i + 1))
-        .ok_or_else(|| Error::Other("elevated-run 需要 --job <spec.json>".into()))?;
-    if !zc_core::is_elevated() {
-        return Err(Error::Other("elevated-run 必须在提升进程中运行".into()));
-    }
-    let spec_path = PathBuf::from(job);
-    let raw = std::fs::read_to_string(&spec_path)
-        .map_err(|e| Error::Other(format!("读取任务失败: {e}")))?;
-    let spec: elevate::JobSpec = serde_json::from_str(&raw)?;
-    let res = elevate::execute_as_worker(&spec);
+    {
+        Some(p) => PathBuf::from(p),
+        None => {
+            eprintln!("elevated-run 需要 --job <spec.json>");
+            return ExitCode::FAILURE;
+        }
+    };
+    let out_path = elevate::result_path_for(&spec_path);
 
-    // 无论成败都回写结果（launcher 靠文件出现判断 UAC 结果）
-    let out_path = result_path_for(&spec_path);
-    std::fs::write(&out_path, serde_json::to_vec_pretty(&res)?)?;
+    let res: elevate::JobResult = std::panic::catch_unwind(|| {
+        if !zc_core::is_elevated() {
+            return elevate::JobResult::fail("", "", "elevated-run 必须在提升进程中运行");
+        }
+        let raw = match std::fs::read_to_string(&spec_path) {
+            Ok(r) => r,
+            Err(e) => {
+                return elevate::JobResult::fail("", "", &format!("读取任务失败: {e}"));
+            }
+        };
+        let spec: elevate::JobSpec = match serde_json::from_str(&raw) {
+            Ok(s) => s,
+            Err(e) => {
+                return elevate::JobResult::fail("", "", &format!("任务反序列化失败: {e}"));
+            }
+        };
+        elevate::execute_as_worker(&spec)
+    })
+    .unwrap_or_else(|panic| {
+        let msg = panic
+            .downcast_ref::<String>()
+            .cloned()
+            .or_else(|| panic.downcast_ref::<&str>().map(|s| s.to_string()))
+            .unwrap_or_else(|| "未知 panic".to_string());
+        elevate::JobResult::fail("", "", &format!("worker panic: {msg}"))
+    });
+
+    if let Err(e) = elevate::write_result_atomic(&out_path, &res) {
+        eprintln!("结果回写失败: {e}");
+        return ExitCode::FAILURE;
+    }
     println!("{}", res.message);
-    Ok(if res.success { ExitCode::SUCCESS } else { ExitCode::FAILURE })
+    if res.success {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    }
 }
 
 fn cmd_undo(args: &[String]) -> Result<ExitCode> {
@@ -351,7 +507,7 @@ fn cmd_undo(args: &[String]) -> Result<ExitCode> {
     for (p, e) in failed.iter().take(20) {
         println!("  ✗ {} — {e}", p.display());
     }
-    Ok(ExitCode::SUCCESS)
+    Ok(decide_exit_code(failed.len(), false))
 }
 
 fn cmd_purge(args: &[String]) -> Result<ExitCode> {
@@ -365,7 +521,7 @@ fn cmd_purge(args: &[String]) -> Result<ExitCode> {
     if !failed.is_empty() {
         println!("  （{} 项保留台账，可重试或照常还原）", failed.len());
     }
-    Ok(ExitCode::SUCCESS)
+    Ok(decide_exit_code(failed.len(), false))
 }
 
 fn cmd_vault(args: &[String]) -> Result<ExitCode> {
@@ -378,28 +534,24 @@ fn cmd_vault(args: &[String]) -> Result<ExitCode> {
         return Err(Error::Other("所有路径都不存在".into()));
     }
     crate::guard_check(&existing)?;
-    let session = format!("manual-{}", zc_core::scanner::now_unix());
+    // v5 S3：批次 id 必须含随机熵（秒级时间戳碰撞会整批抹账）；
+    // 搬运走 stash_journal（move 前落台账），不再「先搬后记账」。
+    let session = format!("manual-{}", zc_core::scanner::new_session_id());
     let session_dir = zc_core::executor::vault::vault_session_dir(&session);
-    let (ok, failed) = zc_core::executor::vault::stash(&session_dir, &existing);
-    let mut bytes = 0u64;
-    let entries: Vec<zc_core::manifest::ManifestEntry> = ok
-        .iter()
-        .map(|(o, d)| {
-            bytes += zc_core::executor::vault::actual_size(d);
-            zc_core::manifest::ManifestEntry {
-                origin: o.display().to_string(),
-                vault_rel: d.display().to_string(),
-                size: zc_core::executor::vault::actual_size(d),
-            }
-        })
-        .collect();
-    zc_core::manifest::CleanManifest {
-        id: session.clone(),
-        created_unix: zc_core::scanner::now_unix(),
-        mode: CleanMode::Vault,
-        entries,
-    }
-    .save()?;
+    let ledger = zc_core::ledger::LedgerStore::open()?;
+    let (ok, failed) =
+        zc_core::executor::vault::stash_journal(&session_dir, &existing, &ledger, &session)?;
+    let bytes: u64 = ok.iter().map(|(_, _, s)| *s).sum();
+    // 与 GUI vault_delete 同一历史口径：搬运事实进 history（7 天后悔期）
+    let _ = history::append(&HistoryRecord {
+        session_id: session.clone(),
+        created_unix: now_unix(),
+        mode: executor::CleanMode::Vault,
+        files: ok.len() as u64,
+        bytes_moved: bytes,
+        kind: Some("manual_vault".to_string()),
+        ..Default::default()
+    });
     println!(
         "已移入暂存区 {} 项 / {} 字节；反悔通道: zclean undo {}",
         ok.len(),
@@ -409,23 +561,43 @@ fn cmd_vault(args: &[String]) -> Result<ExitCode> {
     for (p, e) in failed.iter().take(20) {
         println!("  ✗ {} — {e}", p.display());
     }
-    Ok(ExitCode::SUCCESS)
+    Ok(decide_exit_code(failed.len(), false))
 }
 
 fn guard_check(paths: &[&Path]) -> Result<()> {
     zc_core::guard::Guard::new().vet(paths.iter().copied())
 }
 
-fn cmd_sweep() -> Result<ExitCode> {
-    let s = zc_core::executor::vault::sweep_expired(7).map_err(Error::Other)?;
+fn cmd_sweep(args: &[String]) -> Result<ExitCode> {
+    // sweep [--days N]：后悔期透传内核（sweep_expired 本身以天为参数）
+    let mut days = 7u64;
+    let mut i = 1;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--days" => {
+                days = args
+                    .get(i + 1)
+                    .and_then(|s| s.parse().ok())
+                    .ok_or_else(|| Error::Other("--days 需要非负整数（0=立即收走全部已落账批次）".into()))?;
+                i += 2;
+            }
+            other => return Err(Error::Other(format!("sweep 未知参数 {other}"))),
+        }
+    }
+    let s = zc_core::executor::vault::sweep_expired(days).map_err(Error::Other)?;
     if s.sessions == 0 {
-        println!("没有超过 7 天后悔期的 vault 批次");
+        println!("没有超过 {days} 天后悔期的 vault 批次");
     } else {
         println!(
-            "已清扫 {} 个过期批次：{} 项 / {} 字节",
+            "已清扫 {} 个过期批次：{} 项 / {} 字节{}",
             s.sessions,
             format_number(s.items as u64),
-            format_number(s.bytes)
+            format_number(s.bytes),
+            if s.gc_skipped {
+                "（孤儿目录 GC 因台账读取失败被熔断，未动任何目录）"
+            } else {
+                ""
+            }
         );
     }
     Ok(ExitCode::SUCCESS)
@@ -493,9 +665,7 @@ fn cmd_rules(args: &[String]) -> Result<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
-// ── selftest ────────────────────────────────────────────────────────────────
-
-// ── 工具箱：tree / dupes / startup / migrate ──────────────────────────────
+// ── 工具箱：tree / bigfiles / dupes / startup / migrate ─────────────────────
 
 fn cmd_tree(args: &[String]) -> Result<ExitCode> {
     let mut path: Option<String> = None;
@@ -536,19 +706,66 @@ fn cmd_tree(args: &[String]) -> Result<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
+/// bigfiles PATH [--top N] [--json]：大文件 Top-N（接内核 largest_files）。
+fn cmd_bigfiles(args: &[String]) -> Result<ExitCode> {
+    let mut path: Option<String> = None;
+    let mut top = 50usize;
+    let mut as_json = false;
+    let mut i = 1;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--top" => {
+                top = args
+                    .get(i + 1)
+                    .and_then(|s| s.parse().ok())
+                    .filter(|t: &usize| *t > 0)
+                    .ok_or_else(|| Error::Other("--top 需要正整数".into()))?;
+                i += 2;
+            }
+            "--json" => { as_json = true; i += 1; }
+            p if !p.starts_with('-') && path.is_none() => { path = Some(p.to_string()); i += 1; }
+            other => return Err(Error::Other(format!("bigfiles 未知参数 {other}"))),
+        }
+    }
+    let root = Path::new(
+        path.as_deref()
+            .ok_or_else(|| Error::Other("用法: zclean bigfiles <目录> [--top N] [--json]".into()))?,
+    );
+    if !root.is_dir() {
+        return Err(Error::Other(format!("目录不存在: {}", root.display())));
+    }
+    let files = zc_core::analyze::largest_files(root, top, 1024 * 1024)
+        .map_err(|e| Error::Other(e.to_string()))?;
+    if as_json {
+        let dto: Vec<serde_json::Value> = files
+            .iter()
+            .map(|(p, s)| serde_json::json!({ "path": p.to_string_lossy(), "size": s }))
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&dto)?);
+        return Ok(ExitCode::SUCCESS);
+    }
+    println!("大文件 Top-{}（≥1MB）", top);
+    for (p, s) in &files {
+        println!("{:>12}  {}", human_size(*s), p.display());
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
 fn cmd_dupes(args: &[String]) -> Result<ExitCode> {
     let mut paths: Vec<PathBuf> = Vec::new();
     let mut min_mb = 1u64;
+    let mut as_json = false;
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
             "--min-mb" => { min_mb = args.get(i+1).and_then(|s| s.parse().ok()).unwrap_or(1); i += 2; }
+            "--json" => { as_json = true; i += 1; }
             p if !p.starts_with('-') => { paths.push(PathBuf::from(p)); i += 1; }
             other => return Err(Error::Other(format!("未知参数 {other}"))),
         }
     }
     if paths.is_empty() {
-        return Err(Error::Other("用法: zclean dupes <目录...> [--min-mb N]".into()));
+        return Err(Error::Other("用法: zclean dupes <目录...> [--min-mb N] [--json]".into()));
     }
 
     let t0 = std::time::Instant::now();
@@ -557,6 +774,10 @@ fn cmd_dupes(args: &[String]) -> Result<ExitCode> {
         &zc_core::dedup::DupOptions { min_size: min_mb * 1024 * 1024 },
     )?;
 
+    if as_json {
+        println!("{}", serde_json::to_string_pretty(&groups)?);
+        return Ok(ExitCode::SUCCESS);
+    }
     let waste: u64 = groups.iter().map(|g| g.size * (g.files.len() as u64 - 1)).sum();
     println!(
         "发现 {} 组重复（≥{}MB）· 可回收 ≈ {} · 耗时 {:.1}s",
@@ -594,9 +815,12 @@ fn cmd_startup(args: &[String]) -> Result<ExitCode> {
                     e.command.chars().take(70).collect::<String>()
                 );
             }
-            let d = zc_core::startup::disabled_count();
+            let d = zc_core::startup::disabled_count()?;
             if d > 0 {
-                println!("\n已禁用 {d} 项（enable-all 可恢复）");
+                println!("\n已禁用 {d} 项（enable / enable-all 可恢复）：");
+                for e in zc_core::startup::list_disabled()? {
+                    println!("  ✂ {} — {}", e.key_id, e.value.chars().take(60).collect::<String>());
+                }
             }
         }
         Some("disable") => {
@@ -610,10 +834,27 @@ fn cmd_startup(args: &[String]) -> Result<ExitCode> {
             println!("{}", if changed { format!("已禁用「{}」并备份", t.name) } else { "无需变更".into() });
         }
         Some("enable-all") => {
-            let n = zc_core::startup::enable_all().map_err(|e| Error::Other(e.to_string()))?;
-            println!("已恢复 {n} 个被禁用的启动项");
+            // v5：逐项明细，失败项保留备份可重试
+            let s = zc_core::startup::enable_all()?;
+            println!("已恢复 {} 个被禁用的启动项", s.restored);
+            for (k, e) in s.failed.iter().take(20) {
+                println!("  ✗ {k} — {e}");
+            }
+            if !s.failed.is_empty() {
+                println!("  （{} 项写回失败，已保留在备份中可重试）", s.failed.len());
+            }
+            return Ok(decide_exit_code(s.failed.len(), false));
         }
-        Some(other) => return Err(Error::Other(format!("未知子命令 startup {other}（list|disable|enable-all）"))),
+        Some("enable") => {
+            // 单条恢复（v5）：成功才从备份移除；未知 id → false
+            let key = args.get(2).ok_or_else(|| Error::Other("用法: startup enable <KEY-ID>".into()))?;
+            let done = zc_core::startup::enable_one(key)?;
+            println!("{}", if done { format!("已恢复「{key}」") } else { "备份中无此条目".into() });
+            if !done {
+                return Ok(ExitCode::from(2));
+            }
+        }
+        Some(other) => return Err(Error::Other(format!("未知子命令 startup {other}（list|disable|enable|enable-all）"))),
     }
     Ok(ExitCode::SUCCESS)
 }
@@ -636,7 +877,7 @@ fn cmd_migrate(args: &[String]) -> Result<ExitCode> {
     if action != "undo" {
         let dst_root = PathBuf::from(args.get(3).cloned().unwrap_or_default());
         if src.as_os_str().is_empty() || dst_root.as_os_str().is_empty() {
-            return Err(Error::Other("用法: migrate plan|apply <源目录> <目标盘根/父目录>\n       migrate undo <原路径>".into()));
+            return Err(Error::Other("用法: migrate plan|apply <源目录> <目标盘根/父目录>\n       migrate undo <原路径> [目标目录]".into()));
         }
         let plan = zc_core::migrate::plan(&src, &dst_root)?;
         println!(
@@ -665,24 +906,52 @@ fn cmd_migrate(args: &[String]) -> Result<ExitCode> {
                     return Err(e);
                 }
             };
+            // 与 GUI 同一历史口径：kind=migrate + src/dst 行，历史页可事后撤销
+            let _ = history::append(&HistoryRecord {
+                session_id: id.clone(),
+                created_unix: now_unix(),
+                mode: executor::CleanMode::Vault,
+                files: plan.total_files,
+                bytes_moved: plan.total_bytes,
+                kind: Some("migrate".to_string()),
+                src: Some(plan.src.display().to_string()),
+                dst: Some(plan.dst.display().to_string()),
+            });
             println!("✓ 迁移完成，junction 已建立。清单 id={id}");
             println!("  undo 方式: zclean migrate undo \"{}\"", plan.src.display());
         }
         return Ok(ExitCode::SUCCESS);
     }
-    // undo
+    // undo：`migrate undo <原路径> [目标目录]`（带 dst 时不依赖清单定位）
     let src_ref: &String = if src.as_os_str().is_empty() {
         args.get(2).or_else(|| args.get(3)).ok_or_else(|| Error::Other("migrate undo 需要原路径".into()))?
     } else {
         args.get(2).ok_or_else(|| Error::Other("migrate undo 需要原路径".into()))?
     };
-    let msg = zc_core::migrate::undo(Path::new(src_ref), None).map_err(|e| Error::Other(e.to_string()))?;
+    let dst_arg = args.get(3).cloned();
+    let msg = zc_core::migrate::undo(
+        Path::new(src_ref),
+        if src.as_os_str().is_empty() { None } else { dst_arg.as_deref().map(Path::new) },
+    )
+    .map_err(|e| Error::Other(e))?;
+    let _ = history::append(&HistoryRecord {
+        session_id: format!("migrate-undo-{}", zc_core::scanner::new_session_id()),
+        created_unix: now_unix(),
+        mode: executor::CleanMode::Vault,
+        files: 1,
+        bytes_moved: 0,
+        kind: Some("migrate_undo".to_string()),
+        src: Some(src_ref.clone()),
+        dst: dst_arg,
+    });
     println!("{msg}");
     Ok(ExitCode::SUCCESS)
 }
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     #[test]
     fn format_number_groups() {
         assert_eq!(super::format_number(1234567), "1,234,567");
@@ -695,5 +964,25 @@ mod tests {
         assert!(super::parse_mode(Some(&v)).is_err());
         let ok = String::from("vault");
         assert!(super::parse_mode(Some(&ok)).is_ok());
+    }
+
+    /// 退出码约定（CONTRACT §B12）：0 全成 / 2 部分失败 / 3 取消，取消优先。
+    #[test]
+    fn exit_code_decision() {
+        assert_eq!(decide_exit_code(0, false), ExitCode::SUCCESS);
+        assert_eq!(decide_exit_code(3, false), ExitCode::from(2));
+        assert_eq!(decide_exit_code(0, true), ExitCode::from(3));
+        assert_eq!(decide_exit_code(5, true), ExitCode::from(3), "取消标志必须压过部分失败");
+    }
+
+    #[test]
+    fn json_flag_parses_optional_file() {
+        let a: Vec<String> = ["scan", "--json", "C:\\t\\x.json"].iter().map(|s| s.to_string()).collect();
+        assert_eq!(parse_json_flag(&a, 1).0, Some(Some("C:\\t\\x.json".into())));
+        assert_eq!(parse_json_flag(&a, 1).1, 3);
+        let b: Vec<String> = ["scan", "--json"].iter().map(|s| s.to_string()).collect();
+        assert_eq!(parse_json_flag(&b, 1).0, Some(None));
+        let c: Vec<String> = ["scan", "--json", "--admin"].iter().map(|s| s.to_string()).collect();
+        assert_eq!(parse_json_flag(&c, 1).0, Some(None), "-- 开头的 token 不得被吞成文件名");
     }
 }

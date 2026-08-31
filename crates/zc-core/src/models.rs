@@ -79,6 +79,15 @@ pub struct ScanReport {
     pub bytes_seen: u64,
     pub cancelled: bool,
     pub findings: Vec<Finding>,
+    /// 遍历层无法读取而跳过的条目数（AccessDenied/IO 错误等）。
+    /// 诚实口径：取消/受阻的扫描不再静默少报（v5；serde default 兼容旧报告）。
+    #[serde(default)]
+    pub skipped: usize,
+    /// 超出采集上限（未列明细）的溢出字节合计：executor 只搬明细，
+    /// 这部分被计入 cleanable_bytes 却清不掉——UI 必须单列披露，
+    /// 防止大缓存场景报告虚高（v5）。
+    #[serde(default)]
+    pub honest_overflow_bytes: u64,
 }
 
 impl ScanReport {

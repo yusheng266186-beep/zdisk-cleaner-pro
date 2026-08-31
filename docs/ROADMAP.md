@@ -1,9 +1,13 @@
 # GA 后运行手册 · Roadmap
 
-| 事项 | 说明 | 触发条件 |
+| 事项 | 说明 | 状态 |
 | --- | --- | --- |
-| 72h soak | GA 版真机连续观察，崩溃/误伤零事故记录于本文件附录 | GA 发布后一周内 |
-| winget 提交 | `manifests/` 三件套回填 InstallerSha256 后，向 microsoft/winget-pkgs 提 PR（人工） | 随时可做 |
+| 72h soak | **v5.0.0 发布后重开观察窗口**（v3.0.0 窗口结论已过期；期间崩溃/误伤零事故记录于 soak-log 附录） | 待启动（定时自动化逐日追加） |
+| winget 提交 | v5.0.0 三件套已回填 PackageVersion+InstallerSha256，向 microsoft/winget-pkgs 提 PR（人工） | 待提交 |
 | 代码签名证书 | 当前 Ed25519 仅覆盖应用内更新；SmartScreen 信誉需 OV/EV 证书 | 用户决策 |
-| hotfix 流程 | GA 后缺陷修复一律 patch 号（3.0.x），latest.json 随 Release 重生成 | 视事故 |
-| backlog | Treemap 内直接清理动作 · 迁移长任务后台化与系统通知 · 多语言 en 包 | 择期 |
+| hotfix 流程 | GA 后缺陷修复一律 patch 号（**v5.0.x**，此前"3.0.x"口径作废），latest.json 随 Release 重生成 | 常备 |
+| v5.1 候选 | 规则管理/自定义启停 UI · 定时清理计划 · 系统通知+托盘 · 排除目录 · en 语言包 · S.M.A.R.T. 健康度 · Treemap 右键直接动作 | 择期 |
+
+## 已完成（2026-08-31 · v5.0.0）
+
+全代码库审计（docs/AUDIT-2026-08-31-全方位评估.md）全部 P0 + 大部分 P1 落地：数据安全 journal 化与 GC 熔断、提权白名单打通系统级规则、清空回收站、70 条规则、浅色主题救援、动效/交互闭环收编、CLI 机器可读与退出码约定、单实例、QA 三态回归网（详见 CHANGELOG）。原 backlog 中「迁移长任务后台化与系统通知」的后台化部分已于 v4.0.0 交付、v5.0.0 补全（阶段入 store + 历史页撤销）；"系统通知"仍属候选。

@@ -1,6 +1,12 @@
-/* 设计令牌 v3 —— 「深空驾驶舱 · 精装版」
-   v2 基础上：氛围光背景 / 品牌渐变令牌 / 三档海拔 / 光泽与微光 utilities /
-   主题切换过渡 / 滚动条 hover 态。组件内禁止硬编码色值，一律取变量。 */
+/* 设计令牌 v5 —— 「深空驾驶舱 · 精装版」浅色主题整体补课
+   v5 变更（AUDIT §3E / CONTRACT-v5 §4）：
+   - light 主题 25 组令牌逐条补齐（海拔/状态色/品牌色/hover 三处旧欠账清零）；
+   - 新语义令牌：--zc-hover / --zc-accent-text / --zc-danger-text / --zc-glow-brand；
+     文字与图标用 -text 档（light 达 AA），accent-b/danger 退居描边·图形·渐变档；
+   - --zc-dur-* 时长令牌不再是死码：本文件内以 var() 真实消费（按压/悬停/主题切换/toast）；
+   - 新增 .zc-press 按压反馈、.zc-tile treemap 悬停/选中视觉、.zc-toast-progress 进度线；
+   - 删除全工程零引用的 .zc-lift 死码；html 层 overscroll-behavior 收口。
+   组件内禁止硬编码色值，一律取变量。 */
 @import "tailwindcss";
 
 :root {
@@ -13,17 +19,25 @@
   --zc-surface-3: #202939;
   --zc-border: rgba(255, 255, 255, 0.08);
   --zc-border-strong: rgba(255, 255, 255, 0.14);
+  /* 导航/卡片 hover 底色 */
+  --zc-hover: rgba(255, 255, 255, 0.06);
 
-  /* 品牌 */
+  /* 品牌（-text 为文字/图标档；accent-b 保留给描边/渐变/图形） */
   --zc-accent-a: #6366f1;
   --zc-accent-b: #22d3ee;
+  --zc-accent-text: #22d3ee;
+  /* CTA 辉光：收编原三处手写 box-shadow 串 */
+  --zc-glow-brand:
+    0 10px 32px -10px color-mix(in srgb, var(--zc-accent-b) 45%, transparent),
+    0 2px 12px -4px color-mix(in srgb, var(--zc-accent-a) 40%, transparent);
 
-  /* 状态 */
+  /* 状态（danger 的确认红字走 -text 档） */
   --zc-ok: #34d399;
   --zc-warn: #fbbf24;
   --zc-danger: #fb7185;
+  --zc-danger-text: #fb7185;
 
-  /* 文字 */
+  /* 文字三档 */
   --zc-text-1: #f2f5fa;
   --zc-text-2: #b7c1d3;
   --zc-text-3: #7c879a;
@@ -45,25 +59,53 @@
   --zc-grad-brand: linear-gradient(135deg, var(--zc-accent-a), var(--zc-accent-b));
   --zc-hairline: linear-gradient(90deg, transparent, color-mix(in srgb, var(--zc-accent-b) 55%, transparent), transparent);
 
-  /* 动效规格（统一出口） */
-  --zc-dur-micro: 140ms;
-  --zc-dur-panel: 280ms;
+  /* 动效规格（统一出口；令牌在本文件内以 var() 消费，非死码） */
+  --zc-dur-micro: 140ms;   /* 按压 / hover 微反馈（.zc-press .zc-tile） */
+  --zc-dur-panel: 280ms;   /* 选中环等重量级视觉切换（.zc-tile::after） */
+  --zc-dur-theme: 180ms;   /* 主题切换颜色过渡（:where 块） */
+  --zc-dur-toast: 4200ms;  /* toast 进度线 —— 与 store.ts 4200ms 自动移除严格同参 */
   --zc-ease-standard: cubic-bezier(0.2, 0, 0, 1);
 }
 
 [data-theme="light"] {
   color-scheme: light;
+
+  /* 表面层级 */
   --zc-bg: #f4f6fa;
   --zc-surface-1: #ffffff;
   --zc-surface-2: #f0f3f8;
   --zc-surface-3: #e6ebf3;
   --zc-border: rgba(15, 23, 42, 0.09);
   --zc-border-strong: rgba(15, 23, 42, 0.16);
+  /* 旧版 hover:bg-white/4 在浅色面上完全蒸发 → 深色低透明底 */
+  --zc-hover: rgba(15, 23, 42, 0.055);
+
+  /* 品牌：渐变端点收敛为可承重的中深色调 */
+  --zc-accent-a: #4f46e5;
+  --zc-accent-b: #0891b2;
+  /* 文字档：#22d3ee 直作文字 ≈1.9:1 不可读 → #0e7490 对 #fff ≈4.9:1，AA */
+  --zc-accent-text: #0e7490;
+  --zc-glow-brand:
+    0 10px 28px -10px color-mix(in srgb, var(--zc-accent-b) 35%, transparent),
+    0 2px 10px -4px color-mix(in srgb, var(--zc-accent-a) 25%, transparent);
+
+  /* 状态：light 整体加深（原样沿用 dark 值时红字 ≈3:1 不达 AA） */
+  --zc-ok: #047857;
+  --zc-warn: #b45309;
+  --zc-danger: #dc2626;
+  --zc-danger-text: #b91c1c;
+
+  /* 文字三档：text-3 从 #7c879a（10px 下 3.6:1）加深到 ≈5:1 */
   --zc-text-1: #10182a;
   --zc-text-2: #46536b;
-  --zc-text-3: #7c879a;
-  --zc-shadow-panel: 0 12px 40px -18px rgba(15, 23, 42, 0.25);
-  --zc-shadow-pop: 0 24px 80px -24px rgba(15, 23, 42, 0.35);
+  --zc-text-3: #5b6779;
+
+  /* 海拔：旧 light 只覆盖了两个别名、主档整套缺失 → 补 1/2/3 并让别名走 var() */
+  --zc-shadow-1: 0 1px 2px rgba(15, 23, 42, 0.05), 0 4px 12px -4px rgba(15, 23, 42, 0.1);
+  --zc-shadow-2: 0 8px 28px -10px rgba(15, 23, 42, 0.2);
+  --zc-shadow-3: 0 24px 80px -20px rgba(15, 23, 42, 0.3);
+  --zc-shadow-panel: var(--zc-shadow-2);
+  --zc-shadow-pop: var(--zc-shadow-3);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -80,6 +122,11 @@ body,
 #root {
   height: 100%;
   margin: 0;
+}
+
+/* 嵌套滚动到底不再把 overscroll 交给窗口（滚动劫持收口） */
+html {
+  overscroll-behavior-y: contain;
 }
 
 body {
@@ -111,13 +158,18 @@ button:not(:disabled) {
   cursor: pointer;
 }
 
-/* 主题切换时表面与文字柔和过渡(不动布局属性,不影响动效系统) */
-body,
-aside,
-main {
+/* 主题切换柔和过渡：从壳层(body/aside/main)扩展到卡片/徽章/按钮。
+   :where() 特异性为零——凡自带 transition-* 工具类的元素仍以自己的为准，
+   只过渡颜色类属性，不碰布局属性、不影响动效系统。 */
+:where(body, aside, main, header, footer, nav, button, a, span, li, summary,
+       [class*="rounded"]) {
   transition:
-    background-color 260ms var(--zc-ease-standard),
-    color 260ms var(--zc-ease-standard);
+    background-color var(--zc-dur-theme) var(--zc-ease-standard),
+    border-color var(--zc-dur-theme) var(--zc-ease-standard),
+    color var(--zc-dur-theme) var(--zc-ease-standard),
+    fill var(--zc-dur-theme) var(--zc-ease-standard),
+    stroke var(--zc-dur-theme) var(--zc-ease-standard),
+    box-shadow var(--zc-dur-theme) var(--zc-ease-standard);
 }
 
 ::selection {
@@ -202,15 +254,64 @@ main {
   to { transform: translateX(100%); }
 }
 
-/* 交互卡片悬浮:轻抬 + 品牌发丝描边 */
-.zc-lift {
+/* 按压反馈工具类：active 下沉 .96（收编全站按钮缺失的按压态）。
+   transition 含颜色类属性，覆盖 :where 主题过渡块时行为不回退。 */
+.zc-press {
   transition:
-    transform 220ms var(--zc-ease-standard),
-    border-color 220ms var(--zc-ease-standard),
-    box-shadow 220ms var(--zc-ease-standard);
+    transform var(--zc-dur-micro) var(--zc-ease-standard),
+    background-color var(--zc-dur-micro) var(--zc-ease-standard),
+    border-color var(--zc-dur-micro) var(--zc-ease-standard),
+    color var(--zc-dur-micro) var(--zc-ease-standard),
+    opacity var(--zc-dur-micro) var(--zc-ease-standard);
 }
-.zc-lift:hover {
-  transform: translateY(-2px);
-  border-color: color-mix(in srgb, var(--zc-accent-b) 40%, var(--zc-border));
-  box-shadow: var(--zc-shadow-2);
+.zc-press:active {
+  transform: scale(0.96);
+}
+
+/* treemap 色块（TreemapCanvas）：悬停/选中视觉全部挂 CSS class，
+   容器级事件委托只负责 add/remove class，不进 React 状态。
+   --tile-hue 由每个 tile 内联提供，悬停描边沿用块自身色相（配色不动）。 */
+.zc-tile {
+  box-shadow:
+    inset 0 1px 0 hsl(0 0% 100% / 0.1),
+    inset 0 -1px 0 hsl(0 0% 0% / 0.16);
+  transition: box-shadow var(--zc-dur-micro) var(--zc-ease-standard);
+}
+.zc-tile.zc-tile-hover {
+  box-shadow:
+    inset 0 0 0 2px hsl(var(--tile-hue, 200) 85% 78% / 0.95),
+    0 8px 22px -8px hsl(var(--tile-hue, 200) 80% 45% / 0.55);
+}
+.zc-tile::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow: inset 0 0 0 2px var(--zc-accent-b);
+  opacity: 0;
+  transition: opacity var(--zc-dur-panel) var(--zc-ease-standard);
+  pointer-events: none;
+}
+.zc-tile.zc-tile-sel::after {
+  opacity: 1;
+}
+
+/* toast 自动消失进度线：纯 CSS 动画（motion 不参与，exit 时不会被拖走/重放），
+   时长与 store 的 4200ms 生命周期同参；hover toast 本体即暂停。 */
+@keyframes zc-toast-progress {
+  from { transform: scaleX(1); }
+  to { transform: scaleX(0); }
+}
+.zc-toast-progress {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  height: 2px;
+  width: 100%;
+  transform-origin: 0 50%;
+  opacity: 0.7;
+  animation: zc-toast-progress var(--zc-dur-toast) linear forwards;
+}
+.zc-toast:hover .zc-toast-progress {
+  animation-play-state: paused;
 }

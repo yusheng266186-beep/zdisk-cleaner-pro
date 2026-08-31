@@ -1,20 +1,27 @@
-import { animate, useMotionValue, useTransform } from "motion/react";
-import { useEffect } from "react";
+import { animate, motion, useMotionValue, useTransform } from "motion/react";
+import { useEffect, useId } from "react";
 
 /** 健康环 / 磁盘环：SVG stroke 由弹簧驱动的 motion value 绘制，
- *  数值变化时平滑追赶（可中断），负值/超界自动收敛。 */
+ *  数值变化时平滑追赶（可中断），负值/超界自动收敛。
+ *  v5：gid 改 useId（去重不依赖尺寸）；渐变开关显式化——
+ *  `gradient`（默认 true）不再靠 color 字符串比对暗判：
+ *  显式传入 color 时以 color 为准（实心档），不传 color 且 gradient=true 才走品牌渐变。 */
 export function Ring({
     size = 180,
     stroke = 12,
     pct,
-    color = "var(--zc-accent-a)",
+    color,
+    gradient = true,
     track = "var(--zc-surface-3)",
     children,
 }: {
     size?: number;
     stroke?: number;
     pct: number; // 0..1
+    /** 实心描边色；传入即优先于渐变（保持调用方语义） */
     color?: string;
+    /** 未显式给 color 时是否使用品牌渐变描边（默认 true） */
+    gradient?: boolean;
     track?: string;
     children?: React.ReactNode;
 }) {
@@ -22,6 +29,8 @@ export function Ring({
     const c = 2 * Math.PI * r;
     const mv = useMotionValue(0);
     const offset = useTransform(mv, (v) => c - c * Math.min(Math.max(v, 0), 1));
+    const uid = useId().replace(/[^a-zA-Z0-9_-]/g, "");
+    const gid = `ring-grad-${uid}`;
 
     useEffect(() => {
         const controls = animate(mv, Math.min(Math.max(pct, 0), 1), {
@@ -32,23 +41,27 @@ export function Ring({
         return () => controls.stop();
     }, [pct, mv]);
 
-    const gid = `ring-grad-${Math.round(size)}-${stroke}`;
+    const useGrad = color === undefined && gradient;
+    const strokePaint = color ?? (gradient ? `url(#${gid})` : "var(--zc-accent-a)");
+
     return (
         <div className="relative grid place-items-center" style={{ width: size, height: size }}>
             <svg width={size} height={size} className="-rotate-90">
-                <defs>
-                    <linearGradient id={gid} x1="0%" y1="0%" x2="100%" y2="100%">
-                        <stop offset="0%" stopColor="var(--zc-accent-a)" />
-                        <stop offset="100%" stopColor="var(--zc-accent-b)" />
-                    </linearGradient>
-                </defs>
+                {useGrad && (
+                    <defs>
+                        <linearGradient id={gid} x1="0%" y1="0%" x2="100%" y2="100%">
+                            <stop offset="0%" stopColor="var(--zc-accent-a)" />
+                            <stop offset="100%" stopColor="var(--zc-accent-b)" />
+                        </linearGradient>
+                    </defs>
+                )}
                 <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke={track} strokeWidth={stroke} />
                 <motion.circle
                     cx={size / 2}
                     cy={size / 2}
                     r={r}
                     fill="none"
-                    stroke={color === "var(--zc-accent-a)" ? `url(#${gid})` : color}
+                    stroke={strokePaint}
                     strokeWidth={stroke}
                     strokeLinecap="round"
                     strokeDasharray={c}
@@ -59,6 +72,3 @@ export function Ring({
         </div>
     );
 }
-
-// 局部重导出，避免每个使用处重复 import motion
-import { motion } from "motion/react";

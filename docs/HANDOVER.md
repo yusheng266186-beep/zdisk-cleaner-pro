@@ -7,7 +7,7 @@
 
 ## 1. 项目是什么
 
-ZDiskCleaner Pro 是一个 **Windows 磁盘清理工具**，当前版本 **4.1.0**：
+ZDiskCleaner Pro 是一个 **Windows 磁盘清理工具**，当前版本 **5.0.0**：
 
 - **技术栈**：Rust workspace（核心逻辑）+ Tauri 2（桌面壳）+ React 19（前端，zustand 状态 + motion/react 动画 + Tailwind 4 + lucide 图标）。
 - **产品形态**：桌面 GUI 应用（NSIS 安装包 + 免安装便携 zip）+ 无头 CLI（`zclean`）+ 自动更新通道（GitHub Releases `latest.json` + Ed25519 签名）。
@@ -23,28 +23,33 @@ ZDiskCleanerPro/
 ├── Cargo.toml               # workspace 定义；[workspace.package].version 是全仓版本号
 ├── crates/
 │   ├── zc-core/             # 纯逻辑内核（无 UI 依赖）：
-│   │                        #   scanner(扫描+取消令牌) / rules(规则引擎) / guard(fail-closed 守卫)
-│   │                        #   executor(trash|vault 两种执行模式) / vault(暂存区 stash/undo/过期清扫)
-│   │                        #   ledger(台账:manifests/entries/history) / manifest(执行清单+purge)
-│   │                        #   migrate(目录迁移:junction 计划/应用/撤销)
-│   ├── zc-rules/            # 内置清理规则定义（sys-user-temp、edge-cache、sys-dx-shader、sys-thumbnails 等）
-│   └── zc-cli/              # zclean.exe 无头客户端（scan/apply/undo/purge/vault/sweep/show/rules）
+│   │                        #   scanner(并行扫描+取消令牌+min_age/跳过计数) / guard(fail-closed 守卫+提权白名单)
+│   │                        #   executor(trash|vault+重启删除队列) / vault(journal 化 stash/undo/过期清扫/GC 三保险)
+│   │                        #   ledger(台账:manifests/entries(status)/history(kind,src,dst), SQLite+WAL) / manifest
+│   │                        #   analyze(体积树, 磁盘簇口径) / dedup(三级哈希+硬链接/占位防护) / migrate(junction 搬家)
+│   │                        #   startup(启动项, 备份先行) / system(令牌+占用盘点) / history / recycle_bin(回收站查询/清空)
+│   ├── zc-rules/            # 70 条内置规则（guards/min_age/admin；结构测试强制 admin 根⊆提权白名单）
+│   └── zc-cli/              # zclean.exe 无头客户端（scan --json/apply/undo/purge/vault/sweep --days/show/rules/bigfiles/tree/dupes/startup/migrate）
 ├── src-tauri/               # Tauri 2 壳：全部 IPC 命令在 src/lib.rs；tauri.conf.json（版本/更新通道/打包）
 ├── ui/                      # React 前端（pnpm；vite 构建）
 │   └── src/
-│       ├── pages/           # Home(体检台)/Radar(空间雷达)/BigFiles/Duplicates/MigrateCenter/Tools/History/Settings
-│       ├── components/      # TreemapCanvas(空间雷 treemap)/Ring/ToastStack/CleaningOverlay 等
+│       ├── pages/           # 10 导航页 Home(体检台)/Radar/BigFiles/Duplicates/MigrateCenter/Tools/DeepTools/
+│       │                    #   StartupManager/History/Settings + 一次性 Results(扫描结果, 侧栏可再入) + CleaningOverlay(浮层)
+│       ├── components/      # TreemapCanvas(treemap, 事件委托)/Ring/ToastStack/RollNumber/CommandPalette/Crossfade 等
 │       ├── store.ts         # zustand 全局状态；含 window.__zcStore 调试句柄（自动化测试依赖它）
 │       ├── lib/ipc.ts       # invoke 封装；lib/motion.ts 动效词汇表；lib/format.ts humanSize 等
 │       └── styles/global.css# 设计令牌（--zc-* CSS 变量体系），主题 dark/light
 ├── scripts/
-│   ├── msvc-*.cmd           # MSVC 构建包装（见 §5，必须走包装脚本）
-│   ├── qa_drive.py          # GUI 主流程 QA（11 步）
+│   ├── msvc-*.cmd           # MSVC 构建包装（见 §5，必须走包装脚本；*-signed.cmd 注入 updater 签名环境）
+│   ├── qa_drive.py          # GUI 主流程 QA（12 步；其余 QA 框架的宿主：CDP 客户端/三态计数/截图/报告头）
 │   ├── qa_edge.py           # 边界 QA（8 项）
-│   └── qa_v4.py             # 新能力 QA（5 项）
+│   ├── qa_v4.py             # v4 能力 QA（5 项）
+│   ├── qa_new_features.py   # v5 新功能冒烟（回收站/分区/下钻/筛选/取消/错误横幅）
+│   └── qa_cli.py            # 无头 CLI 全链回归（ZC_DATA_DIR 隔离，自动构建 zc-cli）
 ├── docs/                    # ROADMAP / rules.md / benchmarks.md / soak-log.md / adr/(ADR-001~003)
 ├── portable/                # 便携包说明 README-PORTABLE.txt
-└── target/release/          # 构建产物（注意：target 在仓库根，不在 src-tauri/ 下）
+└── (target-dir)             # 构建产物：workspace `.cargo/config.toml` 将 target-dir 重定向到
+                             #   D:/rust-target/ZDiskCleanerPro/release（护 C 盘空间），仓库内 target/ 是历史遗留
 ```
 
 三篇 ADR 值得先读：`docs/adr/ADR-001-stack.md`（选型）、`ADR-002-data-layer.md`（台账/数据层）、`ADR-003-defer-mft.md`（扫描范围决策）。规则语义在 `docs/rules.md`。
@@ -63,24 +68,30 @@ ZDiskCleanerPro/
   trash 模式: 送系统回收站
 ```
 
-**vault 暂存的两条硬性实现约束**（改代码必须保持）：
+**vault 暂存的硬性实现约束**（改代码必须保持）：
 - **目录**只允许**原子 rename** 进暂存区——绝不做"复制+删除"（跨盘/中断会把数据劈成两半，且产生台账外的孤儿副本）。
 - **文件**是"复制→删源"，复制成功但删源失败时必须**回滚删除暂存副本**（禁止台账外的无主副本）。
+- **journal 化（v5）**：动手前先落台账 `entries.status='pending'`，每条成功 rename/copy 后 UPDATE 为 `'committed'`，全败撤账清桶——崩溃/掉电窗口内 vault 里的实体必有台账行可追溯；孤儿 GC 对 pending 批次、24h 内新目录、名单获取失败三种情况一律不动。
+- **守卫提权白名单（v5）**：`Guard::vet` 禁删根由 `%SystemRoot%/%ProgramFiles%/%ProgramData%` 环境变量派生；进程已提权（`system::is_elevated()`）时自动放行 `elevated_allowlist()` 的目录级精确前缀（系统 Temp/WU 下载/传递优化/Prefetch/转储/PerfLogs/WER 系统级/CBS/WinREAgent 等），其余 Windows 树照旧 fail-closed；USERPROFILE 缺失时 vet 直接拒绝。zc-rules 有结构测试强制"每条 admin 规则的每个字面根必须落在白名单内"。
 
 **计量口径**：台账/暂存区/UI 三方字节一致，靠的是执行后用 `actual_size(dst)`（目录=子树求和）重新实测入账，而不是用扫描时刻的快照。任何新写入暂存区的路径都要沿用这个口径。
 
 ### 3.2 台账（ledger）是唯一的还原事实来源
 
-- SQLite 文件：`%LOCALAPPDATA%\ZDiskCleanerPro3\ledger.db`，三张表：
-  - `manifests`：一次清理批次（id 形如 `1788161892-74f23cf0` 或 `manual-<ts>`）；
-  - `entries`：批内每条记录（列：`manifest_id, origin, vault_rel, size`）；
-  - `history`：给"历史记录"页展示的操作流水。
+- SQLite 文件：`%LOCALAPPDATA%\ZDiskCleanerPro3\ledger.db`（WAL 模式），三张表：
+  - `manifests`：一次清理批次（id 形如 `1788161892-74f23cf0` 或 `manual-<随机熵>`，v5 起不再用秒级时间戳）；
+  - `entries`：批内每条记录（列：`manifest_id, origin, vault_rel, size, status`——status 为 journal 的 pending/committed）；
+  - `history`：给"历史记录"页展示的操作流水（v5 增 `kind/src/dst` 列：clean/migrate/migrate_undo/system 等，迁移行可在历史页直接撤销）。
+  - 旧库自动幂等 `ALTER TABLE` 补列；读取失败一律上抛错误（v5 起不再吞错返回空集合）。
 - **还原（undo）**：把暂存副本搬回 origin；**彻底删除（purge）**：删暂存副本 + 抹台账行（不可逆）；**sweep**：清扫超过 7 天后悔期的批次，并 GC 没有台账引用的孤儿会话目录。
 - 暂存区物理位置：`%LOCALAPPDATA%\ZDiskCleanerPro3\vault\<session-id>\`，目录名即批次 id。
 
 ### 3.3 前后端集成约定（改动时必须遵守的既有契约）
 
-- **雷达体积树缓存**：`analyze_tree` 命令有 10 分钟 TTL 的进程内缓存；**所有会产生写操作的 IPC 命令结尾都要调用 `analyze_cache_invalidate()`**（现有 `clean_selected / undo_session / purge_session / vault_delete / migrate_apply / migrate_undo` 均已接入）。新增写命令时漏掉这一步，雷达页会显示过期数据。
+- **雷达体积树缓存**：`analyze_tree` 命令有 10 分钟 TTL 的进程内缓存；**所有会产生写操作的 IPC 命令在成功与失败路径都要调用 `analyze_cache_invalidate()`**（v5 已接入：clean_selected / undo_session / purge_session / vault_delete / migrate_apply（match 两分支）/ migrate_undo / dism_component_cleanup / empty_recycle_bin）。新增写命令时漏掉这一步，雷达页会显示过期数据。
+- **结构化错误通道（v5）**：全部命令 `Err(ErrorDto{code,message})`，code ∈ guard/cancelled/admin_required/not_found/busy/locked/io/internal；前端 `ipc.ts` 包成 `ZcError`，UI 按 `errCode(e)` 分流——**禁止再往 message 里塞进供前端子串匹配的业务语义**。
+- **取消体系（v5）**：`cancel_scan` 用世代槽（运行中才接受，不会被下次 reset 抹掉）；`big_files/find_dupes/analyze_tree` 共用忙句柄由 `cancel_busy` 取消；`apply` 拒绝 cancelled 报告。
+- **单实例（v5）**：`tauri-plugin-single-instance`，二次启动聚焦已有窗口。关键操作与 worker 输出经 `zlog()` 落 `zc-app.log`。
 - **扫描取消令牌**：`ScanHandle` 每次扫描开始时会 `reset()`。生命周期语义：一个句柄贯穿"请求→进行→取消"，取消只在扫描进行中有效。
 - **迁移（migrate）**：`plan → apply_with_phases(带阶段回调, emit "migrate://phase") → junction 切换`；`migrate_undo` 摘 junction 并把 `.old` 备份复位回源目录。前端把迁移做成了全局后台任务（切页不中断，侧栏有指示）。
 - **IPC 命令清单**全在 `src-tauri/src/lib.rs`（`#[tauri::command]`），DTO 定义同文件，新增命令记得在 `invoke_handler` 注册。
@@ -111,16 +122,16 @@ unset HTTP_PROXY HTTPS_PROXY http_proxy https_proxy ALL_PROXY all_proxy
 ### 5.1 构建
 
 ```bash
-# 完整发布构建（UI + Tauri + NSIS + updater 工件）——必须走包装脚本注入 MSVC 环境：
-cmd //c scripts\\msvc-tauri-build.cmd
-# 产物：
-#   target/release/zdiskcleaner-pro.exe          主程序
-#   target/release/zclean.exe                    CLI（注意：见下方"陈旧 zclean"坑）
-#   target/release/bundle/nsis/*-setup.exe       安装包
-#   updater 签名工件（.sig / latest.json 相关）随 createUpdaterArtifacts 生成
+# 完整发布构建（UI + Tauri + NSIS + updater 工件）——发版一律走带签名的包装（内部转调 msvc-tauri-build.cmd）：
+cmd //c scripts\\msvc-tauri-build-signed.cmd    # 签名环境从 %USERPROFILE%\.tauri\ 读取，密钥不进仓库/日志
+# （不带签名的日常验证构建仍可用 scripts\msvc-tauri-build.cmd）
+# 产物（<t> = D:/rust-target/ZDiskCleanerPro，target-dir 重定向见坑 T2）：
+#   <t>/release/zdiskcleaner-pro.exe             主程序
+#   <t>/release/zclean.exe                       CLI（注意：见下方"陈旧 zclean"坑）
+#   <t>/release/bundle/nsis/*-setup.exe          安装包（.sig 同目录）
 
-# 只构建 CLI（不涉及 Tauri）：
-C:/Users/yusheng/.cargo/bin/cargo.exe build --release -p zc-cli
+# 只构建 CLI（不涉及 Tauri 链接，走 MSVC 包装）：
+cmd //c scripts\\msvc-build-cli.cmd
 
 # 前端单独构建/开发：
 cd ui && pnpm install && pnpm build      # 或 pnpm dev 起 vite
@@ -144,19 +155,23 @@ cargo test
 # 完整（含 Tauri 壳链接）：
 cmd //c scripts\\msvc-test.cmd
 
-# ② GUI 全量 QA（先按 5.2 的 CDP 方式启动应用，再跑）：
-python scripts/qa_drive.py    # 主流程 11 步（含真实扫描与一次真实清理）
-python scripts/qa_edge.py     # 边界 8 项（取消扫描/空选守卫/清理→撤销闭环/刷新持久化…）
-python scripts/qa_v4.py       # 能力 5 项（安全删除/行级暂存/组级清冗余/雷达暂存/后台迁移）
-# 报告落在 C:\Temp\zc-qa-*.json（带唯一时间戳，不会互相覆盖）
+# ② QA 五套（GUI 三+1 先按 5.2 的 CDP 方式启动应用；CLI 一套独立）：
+python scripts/qa_drive.py         # 主流程 12 步（含真实扫描、一次真实清理、结果页再入）
+python scripts/qa_edge.py          # 边界 8 项（取消扫描/空选守卫/清理→撤销闭环/刷新持久化…）
+python scripts/qa_v4.py            # v4 能力 5 项（安全删除/行级暂存/组级清冗余/雷达暂存/后台迁移）
+python scripts/qa_new_features.py  # v5 冒烟（回收站卡/雷达分区/历史下钻与筛选/忙任务取消/init 错误横幅）
+python scripts/qa_cli.py           # 无头 CLI 全链（自动构建 zc-cli；scan --json→vault→undo→purge→sweep --days→exit 码）
+# 报告落在 C:\Temp\zc-qa-*.json：**三态计数 PASS/SKIP/FAIL（SKIP 不算绿）**，头部带 git SHA/exe sha256/版本；
+# 任一 FAIL 当场截图 C:\Temp\zc-qa-fail-*.png。脚本间互斥锁 C:\Temp\zc-qa.lock。
 
-# ③ CLI 冒烟（无 GUI 验证内核链路）：
-./target/release/zclean.exe scan
+# ③ CLI 冒烟（无 GUI 验证内核链路）。退出码：0 全成 / 1 错误 / 2 部分失败 / 3 取消：
+./target/release/zclean.exe scan --json <REPORT> # 扫描（--admin 纳入系统级规则，仅提权生效）
 ./target/release/zclean.exe show <REPORT>
-./target/release/zclean.exe vault <PATH>...      # 手动安全删除（守卫+暂存+台账）
+./target/release/zclean.exe bigfiles <PATH> --top 50 [--json]
+./target/release/zclean.exe vault <PATH>...      # 手动安全删除（守卫+journal 暂存+台账）
 ./target/release/zclean.exe undo <SESSION-ID>    # 还原批次
 ./target/release/zclean.exe purge <SESSION-ID>   # 彻底删除批次
-./target/release/zclean.exe sweep                # 清扫过期批次+孤儿 GC
+./target/release/zclean.exe sweep --days 7       # 清扫过期批次+孤儿 GC（GC 三保险见 §3.1）
 ```
 
 三套 GUI QA **不要并发跑**（共享一个 CDP 端口和应用实例，夹具与台账会互相干扰）。
@@ -177,8 +192,10 @@ python scripts/qa_v4.py       # 能力 5 项（安全删除/行级暂存/组级�
 
 已知文案/结构锚点（写用例直接用）：
 - 体检台主按钮文案是「**开始智能体检**」（页面 H1「磁盘体检，一键开始」是标题）；
-- 空间雷达的 treemap 色块是 **div** 不是 canvas；
+- 空间雷达的 treemap 色块是 **div** 不是 canvas（v5 起带 `data-k="<node key>"` 可元素级点击）；
 - purge 部分失败（文件被占用）的 toast 文案：「已删除 N 项，M 项未能删除…」。
+
+v5 新增 data-testid 锚点（QA 已消费）：`nav[data-nav=results]`（结果页再入）、`[data-card=recyclebin]`（回收站卡，按钮「清空回收站」→armed「确认清空，不可还原」）、`[data-testid=admin-toggle]`、History `li[data-session]` / `[data-testid=hf-vault|hf-recycle|hf-system|hf-migrate]` / `detail-<id>` / `entry-<id>-<i>` / `migrate-undo-<src>`、`[data-testid=results-exec]`（两段式「确认清理 N 项」）、`[data-testid=busy-cancel]`、`[data-testid=radar-root]`、`li[data-key-id]`（禁用项行内「恢复」）、`[data-testid=cleaning-overlay]`（全程同一节点不得重挂）、`[data-testid=init-error]`、重复文件保留选择 `input[name=keep-<gi>]`。
 
 ---
 
@@ -187,7 +204,7 @@ python scripts/qa_v4.py       # 能力 5 项（安全删除/行级暂存/组级�
 1. **升版本**：`Cargo.toml [workspace.package].version` + `src-tauri/tauri.conf.json version`，两处同步（如 4.1.0 → 4.1.1）。
 2. **签名环境**（updater 工件需要）：私钥 `~/.tauri/zdiskcleaner.key`，口令在 `~/.tauri/password.txt`，构建前设
    `TAURI_SIGNING_PRIVATE_KEY` / `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`（内容别进仓库/日志）。
-3. **构建**：`cmd //c scripts\\msvc-tauri-build.cmd`；如 CLI 也有改动，**显式** `cargo build --release -p zc-cli`（见 §9 坑 T3）。
+3. **构建**：`cmd //c scripts\\msvc-tauri-build-signed.cmd`（自动注入 §7.2 的签名环境）；如 CLI 也有改动，**显式** `cmd //c scripts\\msvc-build-cli.cmd`（见 §9 坑 T3）。
 4. **提交 + tag**：`git add -A && git commit && git tag v<版本>`。
 5. **推送与发布**：`git push origin main --tags`（用已存储凭据或 gh；**任何令牌不得写入仓库与文档**）。然后
    `gh release create v<版本>` 上传 **4 个资产，名字必须精确**：
@@ -225,7 +242,7 @@ python scripts/qa_v4.py       # 能力 5 项（安全删除/行级暂存/组级�
 
 ### 构建
 - **T1 必须走 MSVC 包装脚本**：直接开 bash 跑 cargo 链接 Tauri 壳会因缺 MSVC 环境失败。`scripts/msvc-*.cmd` 负责注入 vcvars64 + PATH。注意包装脚本本身不带 cargo 时要用绝对路径 `C:/Users/yusheng/.cargo/bin/cargo.exe`。
-- **T2 target 目录位置**：workspace 的产物在**仓库根** `target/release/`，不在 `src-tauri/target/`（找 exe 别找错地方）。
+- **T2 target 目录位置**：产物目录一律以 **`cargo metadata` 的 target_directory** 为准（QA/打包脚本已如此）。本机仓库放有未入库的 `.cargo/config.toml`，把 target-dir 重定向到 `D:/rust-target/ZDiskCleanerPro/release/` 以护 C 盘空间；fresh clone/CI 默认落在仓库根 `target/`。仓库根 `target/` 可能存有陈旧 exe（坑 T3 同源）。
 - **T3 陈旧 zclean**：`msvc-tauri-build.cmd`（tauri build）**不会**重编 zc-cli。改过内核/CLI 后直接跑 `zclean` 会用到旧二进制，症状是"新子命令不存在"。CLI 变更后显式 `cargo build --release -p zc-cli`。
 
 ### CDP / GUI 自动化
@@ -281,4 +298,4 @@ python scripts/qa_v4.py       # 能力 5 项（安全删除/行级暂存/组级�
 | `portable/README-PORTABLE.txt` | 便携包说明（版本/数据目录） |
 
 ---
-*交接完成基准：v4.1.0，main 分支。GUI 回归基线：qa_drive 11/11 + qa_edge 8/8 + qa_v4 5/5 全绿。*
+*交接完成基准：v5.0.0，main 分支（2026-09-01）。回归基线：91 个 Rust 测试全绿 + GUI 四套 30 项（qa_drive 12 / qa_edge 8 / qa_v4 5 / qa_new_features 6 中 5 绿 1 真 SKIP）+ qa_cli 6 项全绿；诚实 SKIP 两项：startup 夹具被本机安全软件秒删（E1）、回收站空态无物可清。报告在 C:\Temp 带时间戳。全代码库审计底稿见 docs/AUDIT-2026-08-31-全方位评估.md，v5 跨层契约见 docs/CONTRACT-v5.md。*

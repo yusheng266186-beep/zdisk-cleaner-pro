@@ -1,9 +1,11 @@
-ZDiskCleanerPro v3.0.4 绿色便携版
+ZDiskCleanerPro v5.0.0 绿色便携版
 ====================================
 
 【启动方式】
-  双击 ZDiskCleanerPro.exe 即可运行。这就是程序的唯一入口——
-  Tauri 应用本体就是这一个 exe，无需安装、无需其它组件。
+  双击 ZDiskCleanerPro.exe 即可运行。无需安装、无需其它组件。
+  包内附赠 zclean.exe（v5 起）：无图形界面的命令行客户端，
+  scan/apply/undo/purge/vault/sweep/bigfiles/dupes 全链路可用，
+  与图形版共享同一数据目录与台账。
 
 【系统要求】
   Windows 10/11 x64。
@@ -16,8 +18,10 @@ ZDiskCleanerPro v3.0.4 绿色便携版
   想改成 U 盘等自定义位置，可在启动前设置环境变量 ZC_DATA_DIR 指向目标目录。
 
 【关于提权】
-  涉及系统深处的清理（如 DISM 组件库、还原点）会按需弹出一次 UAC 窗口，
-  拒绝则跳过该项，不影响其余功能。
+  涉及系统深处的清理（DISM 组件库、还原点、以及 Windows Update 缓存/
+  系统 Temp/传递优化等系统级规则）需要以管理员身份运行本程序：
+  提权后守卫自动按目录级白名单放行这些已知安全目录，其余系统
+  文件照旧 fail-closed 拒绝；拒绝 UAC 则跳过该项，不影响其余功能。
 
 【与应用内更新】
   便携版同样支持应用内检查更新（Ed25519 签名校验 + GitHub 渠道），

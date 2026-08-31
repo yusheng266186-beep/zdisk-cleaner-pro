@@ -1,28 +1,81 @@
 import type {
     CleanOutcome,
+    FailDto,
     HistoryRecord,
+    MigrateUndoDto,
+    RecycleBinInfo,
+    RecycleBinSummary,
     Risk,
     RuleMeta,
     ScanReport,
+    SessionEntryDto,
+    StartupDisabledEntry,
+    UndoResultDto,
 } from "./types";
 import { SAMPLE_TREE } from "./tree";
 import type { TreeNode } from "./tree";
 
 /** 桌面壳 ↔ 纯浏览器 双通道桥。
  *  浏览器模式服务于 UI 开发（pnpm dev），数据为「真机采样」的确定性样本，
- *  并由 store 打上 DEMO 徽标 —— 不假装是真实清理。 */
+ *  并由 store 打上 DEMO 徽标 —— 不假装是真实清理。
+ *
+ *  v5（CONTRACT-v5 §2/§3）：
+ *  - 所有桌面端命令统一走 call()：Err(ErrorDto) → ZcError{code,message}；
+ *    非对象 reject → ZcError('internal')。UI 侧一律 errCode(e) 判定，禁止子串匹配。
+ *  - scan://progress 监听器模块级复用，不再每次扫描泄漏一个。 */
 
 export const isDesktop = (): boolean => "__TAURI_INTERNALS__" in window;
 
-type ProgressCb = (files: number, bytesSeen: number) => void;
-let progressCb: ProgressCb | null = null;
+/* ── 错误包装 ─────────────────────────────────────────── */
+
+export class ZcError extends Error {
+    code: string;
+    constructor(code: string, message: string) {
+        super(message);
+        this.name = "ZcError";
+        this.code = code;
+    }
+}
+
+export const errCode = (e: unknown): string =>
+    e instanceof ZcError ? e.code : "internal";
+
+export const errMsg = (e: unknown): string =>
+    e instanceof Error ? e.message : String(e);
+
+function wrapReject(raw: unknown): ZcError {
+    if (
+        raw && typeof raw === "object" &&
+        "code" in raw && "message" in raw
+    ) {
+        const dto = raw as { code: unknown; message: unknown };
+        return new ZcError(String(dto.code ?? "internal"), String(dto.message ?? ""));
+    }
+    if (typeof raw === "string") return new ZcError("internal", raw);
+    return new ZcError("internal", String(raw));
+}
+
+/** 桌面端 invoke 统一入口：成功透传，失败一律 ZcError。 */
+async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
+    const { invoke } = await import("@tauri-apps/api/core");
+    try {
+        return await invoke<T>(cmd, args);
+    } catch (e) {
+        throw wrapReject(e);
+    }
+}
+
+/* ── 元信息 / 基础数据 ─────────────────────────────────── */
 
 export function coreVersion(): Promise<string> {
     if (!isDesktop()) return Promise.resolve("browser-dev");
-    return import("@tauri-apps/api/core").then((m) => m.invoke<string>("ping"));
+    return call<string>("ping");
 }
 
 export interface DriveInfo { label: string; total_bytes: number; free_bytes: number }
+
+/** 盘符 label → analyze_tree 可接受的根路径（"C:" → "C:/"；Home 磁盘环与 Radar 选择器共用） */
+export const driveRootPath = (label: string): string => label.replace(/[\\/]+$/, "") + "/";
 
 export async function listDrives(): Promise<DriveInfo[]> {
     if (!isDesktop()) {
@@ -31,14 +84,12 @@ export async function listDrives(): Promise<DriveInfo[]> {
             { label: "D:", total_bytes: 1024 * 107_374_182_400 / 1024, free_bytes: 640 * 1024 ** 3 },
         ];
     }
-    const { invoke } = await import("@tauri-apps/api/core");
-    return invoke<DriveInfo[]>("drives_overview");
+    return call<DriveInfo[]>("drives_overview");
 }
 
 export async function loadRuleMeta(): Promise<RuleMeta[]> {
     if (!isDesktop()) return SAMPLE_RULES;
-    const { invoke } = await import("@tauri-apps/api/core");
-    return invoke<RuleMeta[]>("rules_meta");
+    return call<RuleMeta[]>("rules_meta");
 }
 
 export async function loadHistory(): Promise<HistoryRecord[]> {
@@ -46,24 +97,44 @@ export async function loadHistory(): Promise<HistoryRecord[]> {
         { session_id: "demo-1", created_unix: Date.now() / 1000 - 86400 * 2.1, mode: "vault", files: 1418, bytes_moved: 132 * 1024 ** 2 },
         { session_id: "demo-2", created_unix: Date.now() / 1000 - 86400 * 6.4, mode: "recycle_bin", files: 306, bytes_moved: 41 * 1024 ** 2 },
     ];
-    const { invoke } = await import("@tauri-apps/api/core");
-    return invoke<HistoryRecord[]>("history_list");
+    return call<HistoryRecord[]>("history_list");
+}
+
+/** 应用自身版本（tauri.conf.json 的 version），与内核版本分开展示。 */
+export async function appVersion(): Promise<string> {
+    if (!isDesktop()) return "browser-dev";
+    const { getVersion } = await import("@tauri-apps/api/app");
+    return getVersion();
 }
 
 /* ── 扫描 ─────────────────────────────────────────────── */
 
+type ProgressCb = (files: number, bytesSeen: number) => void;
+let progressCb: ProgressCb | null = null;
+/** 模块级复用：scan://progress 只 listen 一次，修「每次扫描泄漏一个监听器」 */
+let progressUnlisten: (() => void) | null = null;
+
+async function ensureProgressListener(): Promise<void> {
+    if (progressUnlisten) return;
+    const { listen } = await import("@tauri-apps/api/event");
+    progressUnlisten = await listen<number[]>("scan://progress", (ev) => {
+        progressCb?.(ev.payload[0], ev.payload[1]);
+    });
+}
+
 let cancelledFlag = false;
 
-export async function startScan(cb: ProgressCb, onDone: (r: ScanReport) => void): Promise<void> {
+/** 智能体检。includeAdmin=true 且已提权 → 内核纳入 admin 规则（契约 §2 scan_now）。 */
+export async function startScan(
+    cb: ProgressCb,
+    onDone: (r: ScanReport) => void,
+    includeAdmin = false,
+): Promise<void> {
     cancelledFlag = false;
     if (isDesktop()) {
-        const { invoke } = await import("@tauri-apps/api/core");
-        const { listen } = await import("@tauri-apps/api/event");
         progressCb = cb;
-        await listen<number[]>("scan://progress", (ev) => {
-            progressCb?.(ev.payload[0], ev.payload[1]);
-        });
-        const rep = await invoke<ScanReport>("scan_now", { includeAdmin: false });
+        await ensureProgressListener();
+        const rep = await call<ScanReport>("scan_now", { includeAdmin });
         if (!rep.cancelled) onDone(rep);
         return;
     }
@@ -85,28 +156,37 @@ export async function startScan(cb: ProgressCb, onDone: (r: ScanReport) => void)
         if (p >= 1 || cancelledFlag) clearInterval(timer);
     }, 90);
 
-    setTimeout(() => {
-        if (cancelledFlag) return;
-        onDone({
-            id: `demo-${Date.now().toString(36)}`,
-            started_unix: Date.now() / 1000,
-            duration_ms: 2400,
-            files_seen: 28_236,
-            bytes_seen: target.bytes * 220,
-            cancelled: false,
-            findings: SAMPLE_FINDINGS,
-        });
-    }, 2500);
+    await wait(2500);
+    if (cancelledFlag) return;
+    onDone({
+        id: `demo-${Date.now().toString(36)}`,
+        started_unix: Date.now() / 1000,
+        duration_ms: 2400,
+        files_seen: 28_236,
+        bytes_seen: target.bytes * 220,
+        cancelled: false,
+        findings: SAMPLE_FINDINGS,
+    });
 }
 
 export async function cancelScan(): Promise<void> {
     cancelledFlag = true;
     if (!isDesktop()) return;
-    const { invoke } = await import("@tauri-apps/api/core");
-    await invoke("cancel_scan");
+    await call<void>("cancel_scan");
 }
 
-/* ── 清理 / 还原 ───────────────────────────────────────── */
+/* ── 忙任务取消（big_files / find_dupes / analyze_tree 共用 BUSY_HANDLE）── */
+
+/** 演示态忙任务取消标志：demoBusyWait 轮询命中即抛 ZcError('cancelled') */
+let busyCancelFlag = false;
+
+export async function cancelBusy(): Promise<void> {
+    busyCancelFlag = true;
+    if (!isDesktop()) return;
+    await call<void>("cancel_busy");
+}
+
+/* ── 清理 / 还原 / 彻底删除 ────────────────────────────── */
 
 export async function cleanSelected(
     report: ScanReport,
@@ -122,7 +202,7 @@ export async function cleanSelected(
 
     if (!isDesktop()) {
         // 演示态：只做延迟动画，不改任何真实文件
-        await new Promise((r) => setTimeout(r, 1500));
+        await wait(1500);
         return {
             requested_files: requestedFiles,
             requested_bytes: requestedBytes,
@@ -135,68 +215,103 @@ export async function cleanSelected(
                     : "[演示] 已移入回收站：清空回收站前不会真正释放磁盘空间",
         };
     }
-    const { invoke } = await import("@tauri-apps/api/core");
-    return invoke<CleanOutcome>("clean_selected", {
+    return call<CleanOutcome>("clean_selected", {
         report,
         ruleIds,
         mode: mode === "vault" ? "vault" : "recycle_bin",
     });
 }
 
-export async function undoSession(_id: string): Promise<string> {
+/** 还原本批：结构化 UndoResultDto（不再是拼好的中文句子，toast 文案归 UI 层）。 */
+export async function undoSession(id: string): Promise<UndoResultDto> {
     if (!isDesktop()) {
-        await new Promise((r) => setTimeout(r, 900));
-        return "[演示] 已还原本批全部条目";
+        await wait(900);
+        return demoUndoResult(id);
     }
-    const { invoke } = await import("@tauri-apps/api/core");
-    return invoke<string>("undo_session", { id: _id });
+    return call<UndoResultDto>("undo_session", { id });
 }
 
 /** 彻底删除 vault 批次副本：把 7 天后悔期结束的空间真正释放出来。 */
-export async function purgeSession(_id: string): Promise<string> {
+export async function purgeSession(id: string): Promise<UndoResultDto> {
     if (!isDesktop()) {
-        await new Promise((r) => setTimeout(r, 900));
-        return "[演示] 已彻底删除本批副本，空间已释放";
+        await wait(900);
+        return demoUndoResult(id);
     }
-    const { invoke } = await import("@tauri-apps/api/core");
-    return invoke<string>("purge_session", { id: _id });
+    return call<UndoResultDto>("purge_session", { id });
 }
 
-/** 应用自身版本（tauri.conf.json 的 version），与内核版本分开展示。 */
-export async function appVersion(): Promise<string> {
-    if (!isDesktop()) return "browser-dev";
-    const { getVersion } = await import("@tauri-apps/api/app");
-    return getVersion();
+function demoUndoResult(id: string): UndoResultDto {
+    return { id, done: 1418, bytes: 132 * 1024 ** 2, failed: [] };
+}
+
+/** 批次明细下钻（journal 化后 pending 行 = 未完成警示）。 */
+export async function sessionEntries(id: string): Promise<SessionEntryDto[]> {
+    if (!isDesktop()) {
+        await wait(250);
+        return [
+            { origin: String.raw`C:\Users\demo\AppData\Local\Temp\tmp_a.log`, vault_rel: "tmp_a.log", size: 812_400, status: "committed" },
+            { origin: String.raw`C:\Users\demo\Downloads\old-setup.exe`, vault_rel: "old-setup.exe", size: 84_934_656, status: "committed" },
+            { origin: String.raw`C:\Users\demo\AppData\Local\pnpm-state\v3\state.json`, vault_rel: "state.json", size: 56, status: "pending" },
+        ];
+    }
+    return call<SessionEntryDto[]>("session_entries", { id });
+}
+
+/* ── 回收站（v5 新增）──────────────────────────────────── */
+
+let demoRecycleBin: RecycleBinInfo = { items: 342, bytes: 3.1 * 1024 ** 3 };
+
+export async function queryRecycleBin(): Promise<RecycleBinInfo> {
+    if (!isDesktop()) {
+        await wait(200);
+        return { ...demoRecycleBin };
+    }
+    return call<RecycleBinInfo>("query_recycle_bin");
+}
+
+export async function emptyRecycleBin(): Promise<RecycleBinSummary> {
+    if (!isDesktop()) {
+        await wait(900);
+        const s: RecycleBinSummary = {
+            items_before: demoRecycleBin.items,
+            bytes_before: Math.round(demoRecycleBin.bytes),
+            bytes_freed: Math.round(demoRecycleBin.bytes),
+        };
+        demoRecycleBin = { items: 0, bytes: 0 };
+        return s;
+    }
+    return call<RecycleBinSummary>("empty_recycle_bin");
 }
 
 /* ── 空间雷达 ─────────────────────────────────────────── */
 
+/** 构建体积树。path 空 = 主目录；取消 → ZcError('cancelled')。 */
 export async function analyzeTree(path = "", depth = 4, fresh = false): Promise<TreeNode> {
-    if (!isDesktop()) return SAMPLE_TREE;
-    const { invoke } = await import("@tauri-apps/api/core");
-    return invoke<TreeNode>("analyze_tree", { path, depth, fresh });
+    if (!isDesktop()) {
+        await demoBusyWait(1200);
+        return SAMPLE_TREE;
+    }
+    return call<TreeNode>("analyze_tree", { path, depth, fresh });
 }
 
 /** 手动安全删除：任意路径走守卫 + 暂存区 + 台账，可在历史页还原。
  *  大文件 / 重复文件冗余份 / 雷达选中目录的手动清理共用这一个入口。 */
 export async function vaultDelete(paths: string[]): Promise<CleanOutcome> {
     if (!isDesktop()) {
-        await new Promise((r) => setTimeout(r, 800));
+        await wait(800);
         return {
             requested_files: paths.length, requested_bytes: 0,
             done_files: paths.length, done_bytes: 0,
             failed: [], semantics_note: "[演示] 已移入暂存区，可在历史页还原",
         };
     }
-    const { invoke } = await import("@tauri-apps/api/core");
-    return invoke<CleanOutcome>("vault_delete", { paths });
+    return call<CleanOutcome>("vault_delete", { paths });
 }
 
 /** 在资源管理器中打开目录。浏览器开发态无壳可调，直接 resolve。 */
 export async function revealInExplorer(path: string): Promise<void> {
     if (!isDesktop()) return;
-    const { invoke } = await import("@tauri-apps/api/core");
-    await invoke("reveal_in_explorer", { path });
+    await call<void>("reveal_in_explorer", { path });
 }
 
 /* ── 大文件 / 重复文件猎手 ────────────────────────────── */
@@ -208,20 +323,18 @@ export interface DuplicateGroup { size: number; hash: string; files: string[] }
 
 export async function bigFiles(path = "", top = 50): Promise<BigFile[]> {
     if (!isDesktop()) {
-        await wait(900);
+        await demoBusyWait(900);
         return demoBigFiles.map((f) => ({ ...f }));
     }
-    const { invoke } = await import("@tauri-apps/api/core");
-    return invoke<BigFile[]>("big_files", { path, top });
+    return call<BigFile[]>("big_files", { path, top });
 }
 
 export async function findDupes(path: string, minMb = 10): Promise<DuplicateGroup[]> {
     if (!isDesktop()) {
-        await wait(1500);
+        await demoBusyWait(1500);
         return demoDupes.map((g) => ({ ...g, files: [...g.files] }));
     }
-    const { invoke } = await import("@tauri-apps/api/core");
-    return invoke<DuplicateGroup[]>("find_dupes", { path, minMb });
+    return call<DuplicateGroup[]>("find_dupes", { path, minMb });
 }
 
 const MB = 1024 ** 2;
@@ -274,14 +387,7 @@ export async function listStartups(): Promise<StartupEntry[]> {
         await wait(350);
         return [...demoStartups];
     }
-    const { invoke } = await import("@tauri-apps/api/core");
-    return invoke<StartupEntry[]>("startup_list");
-}
-
-export async function disabledCount(): Promise<number> {
-    if (!isDesktop()) return demoStartupBackup.length;
-    const { invoke } = await import("@tauri-apps/api/core");
-    return invoke<number>("startup_disabled_count");
+    return call<StartupEntry[]>("startup_list");
 }
 
 export async function disableStartup(keyId: string): Promise<boolean> {
@@ -293,8 +399,7 @@ export async function disableStartup(keyId: string): Promise<boolean> {
         demoStartupBackup.push(hit);
         return true;
     }
-    const { invoke } = await import("@tauri-apps/api/core");
-    return invoke<boolean>("startup_disable", { keyId });
+    return call<boolean>("startup_disable", { keyId });
 }
 
 export async function enableAllStartups(): Promise<number> {
@@ -305,8 +410,29 @@ export async function enableAllStartups(): Promise<number> {
         demoStartupBackup = [];
         return n;
     }
-    const { invoke } = await import("@tauri-apps/api/core");
-    return invoke<number>("startup_enable_all");
+    return call<number>("startup_enable_all");
+}
+
+/** 已禁用区清单（备份 JSON 对账；解析失败后端上抛 Err，不再静默空）。 */
+export async function listDisabledStartups(): Promise<StartupDisabledEntry[]> {
+    if (!isDesktop()) {
+        await wait(200);
+        return demoStartupBackup.map((e) => ({ key_id: e.key_id, value: e.command }));
+    }
+    return call<StartupDisabledEntry[]>("startup_list_disabled");
+}
+
+/** 单条恢复：成功才从备份移除；返回是否回写成功。 */
+export async function enableOneStartup(keyId: string): Promise<boolean> {
+    if (!isDesktop()) {
+        await wait(400);
+        const hit = demoStartupBackup.find((e) => e.key_id === keyId);
+        if (!hit) return false;
+        demoStartupBackup = demoStartupBackup.filter((e) => e.key_id !== keyId);
+        demoStartups = [...demoStartups, hit];
+        return true;
+    }
+    return call<boolean>("startup_enable_one", { keyId });
 }
 
 /* ── 存储迁移中心 ─────────────────────────────────────── */
@@ -322,22 +448,37 @@ export interface MigrationPlan {
 export type MigratePhaseKey = "copy" | "verify" | "link" | "smoke" | "cleanup";
 export type MigratePhaseEvent = { phase: MigratePhaseKey; state: "start" | "end" };
 
+/** 五阶段中文文案：侧栏胶囊与迁移中心进度条共用（App 全局一份，切页不丢）。 */
+export const MIGRATE_PHASE_LABEL: Record<MigratePhaseKey, string> = {
+    copy: "复制",
+    verify: "校验",
+    link: "建 junction",
+    smoke: "冒烟",
+    cleanup: "清理备份",
+};
+
 type MigratePhaseCb = (p: MigratePhaseEvent) => void;
-let migratePhaseCb: MigratePhaseCb | null = null;
+/** 多订阅者 + 底层单监听：订阅方（App 全局一次）卸载不影响内核事件源。 */
+const migrateSubs = new Set<MigratePhaseCb>();
+let migrateUnlisten: (() => void) | null = null;
 
 /** 订阅内核真实阶段事件（migrate://phase，payload = [phase, state]）。
- *  浏览器模式无内核，返回 noop unlisten —— 数据由 applyMigration 模拟推送。 */
+ *  浏览器模式无内核监听，事件由 applyMigration 模拟推送。 */
 export async function onMigratePhase(cb: MigratePhaseCb): Promise<() => void> {
-    migratePhaseCb = cb;
-    if (!isDesktop()) return () => { migratePhaseCb = null; };
-    const { listen } = await import("@tauri-apps/api/event");
-    const unlisten = await listen<string[]>("migrate://phase", (ev) => {
-        cb({ phase: ev.payload[0] as MigratePhaseKey, state: ev.payload[1] as "start" | "end" });
-    });
+    migrateSubs.add(cb);
+    if (isDesktop() && !migrateUnlisten) {
+        const { listen } = await import("@tauri-apps/api/event");
+        migrateUnlisten = await listen<string[]>("migrate://phase", (ev) => {
+            emitMigratePhase({ phase: ev.payload[0] as MigratePhaseKey, state: ev.payload[1] as "start" | "end" });
+        });
+    }
     return () => {
-        unlisten();
-        migratePhaseCb = null;
+        migrateSubs.delete(cb);
     };
+}
+
+function emitMigratePhase(e: MigratePhaseEvent) {
+    for (const cb of [...migrateSubs]) cb(e);
 }
 
 export async function planMigration(src: string, dstRoot: string): Promise<MigrationPlan> {
@@ -351,8 +492,7 @@ export async function planMigration(src: string, dstRoot: string): Promise<Migra
             total_files: 218_304,
         };
     }
-    const { invoke } = await import("@tauri-apps/api/core");
-    return invoke<MigrationPlan>("migrate_plan", { src, dstRoot });
+    return call<MigrationPlan>("migrate_plan", { src, dstRoot });
 }
 
 export async function applyMigration(src: string, dstRoot: string): Promise<string> {
@@ -362,24 +502,23 @@ export async function applyMigration(src: string, dstRoot: string): Promise<stri
         const phases: MigratePhaseKey[] = ["copy", "verify", "link", "smoke", "cleanup"];
         for (const phase of phases) {
             await wait(250);
-            migratePhaseCb?.({ phase, state: "start" });
+            emitMigratePhase({ phase, state: "start" });
             await wait(250);
-            migratePhaseCb?.({ phase, state: "end" });
+            emitMigratePhase({ phase, state: "end" });
         }
         await wait(250);
         return `demo-${Date.now().toString(36)}`;
     }
-    const { invoke } = await import("@tauri-apps/api/core");
-    return invoke<string>("migrate_apply", { src, dstRoot });
+    return call<string>("migrate_apply", { src, dstRoot });
 }
 
-export async function undoMigration(src: string, dst?: string): Promise<string> {
+/** 撤销迁移：结构化 MigrateUndoDto（restored + failed 明细）。 */
+export async function migrateUndo(src: string, dst?: string): Promise<MigrateUndoDto> {
     if (!isDesktop()) {
         await wait(1200);
-        return "[演示] junction 已摘除，原目录数据已复位";
+        return { restored: 218_304, failed: [] };
     }
-    const { invoke } = await import("@tauri-apps/api/core");
-    return invoke<string>("migrate_undo", { src, dst: dst ?? null });
+    return call<MigrateUndoDto>("migrate_undo", { src, dst: dst ?? null });
 }
 
 /* ── 深度工具：系统级占用 / WinSxS 组件清理 / 还原点 ───── */
@@ -402,8 +541,7 @@ export async function systemOccupancy(): Promise<OccupancyItem[]> {
             { name: "pagefile.sys", path: String.raw`C:\pagefile.sys`, size: 8 * GB, guide_zh: "此为虚拟内存，建议通过 系统属性→高级→性能→虚拟内存 调整" },
         ];
     }
-    const { invoke } = await import("@tauri-apps/api/core");
-    return invoke<OccupancyItem[]>("system_occupancy");
+    return call<OccupancyItem[]>("system_occupancy");
 }
 
 type DismProgressCb = (pct: number) => void;
@@ -422,8 +560,8 @@ export async function onDismProgress(cb: DismProgressCb): Promise<() => void> {
     };
 }
 
-/** WinSxS 组件清理：未提权时桌面端以 Err("需要管理员：…") 拒绝，
- *  由 UI 层展示提权引导。 */
+/** WinSxS 组件清理：未提权时后端返回 Err(code=admin_required)，
+ *  由 UI 层 errCode(e) 判定并展示提权引导。 */
 export async function dismCleanup(): Promise<void> {
     if (!isDesktop()) {
         // 演示态：4 次 25% 间隔推进后 resolve（4×400ms = 1.6s）
@@ -433,8 +571,7 @@ export async function dismCleanup(): Promise<void> {
         }
         return;
     }
-    const { invoke } = await import("@tauri-apps/api/core");
-    await invoke("dism_component_cleanup");
+    await call<void>("dism_component_cleanup");
 }
 
 export async function createRestorePoint(desc: string): Promise<void> {
@@ -442,9 +579,10 @@ export async function createRestorePoint(desc: string): Promise<void> {
         await wait(1200);
         return;
     }
-    const { invoke } = await import("@tauri-apps/api/core");
-    await invoke("create_restore_point", { desc });
+    await call<void>("create_restore_point", { desc });
 }
+
+/* ── 演示态辅助 ───────────────────────────────────────── */
 
 const hitCount = (f: { hits: unknown[]; overflow_hits: number }) =>
     f.hits.length + (f.overflow_hits ?? 0);
@@ -452,6 +590,21 @@ const byteSum = (f: { hits: { size: number }[]; overflow_bytes: number }) =>
     f.hits.reduce((a, h) => a + h.size, 0) + (f.overflow_bytes ?? 0);
 
 const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+/** 忙任务演示等待：100ms 粒度轮询取消标志，命中即抛 cancelled。 */
+async function demoBusyWait(ms: number): Promise<void> {
+    let t = 0;
+    while (t < ms) {
+        if (busyCancelFlag) {
+            busyCancelFlag = false;
+            throw new ZcError("cancelled", "已取消");
+        }
+        await wait(100);
+        t += 100;
+    }
+    busyCancelFlag = false;
+}
+
 const dirNameOf = (p: string) =>
     p.replace(/[\\/]+$/, "").split(/[\\/]/).pop() ?? "target-dir";
 
@@ -533,4 +686,4 @@ export const SAMPLE_FINDINGS = [
     mk("dev-playwright", [], 6, 0),
 ].map((f) => f as never as ScanReport["findings"][number]);
 
-export type { Risk };
+export type { Risk, FailDto };

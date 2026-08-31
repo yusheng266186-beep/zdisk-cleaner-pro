@@ -2,6 +2,95 @@
 
 所有版本的变更记录。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [v5.0.0] - 2026-08-31 · 大版本「可信」——数据安全重构 · 可清理面翻倍 · 全链路闭环
+
+> 本版基于全代码库审计（docs/AUDIT-2026-08-31-全方位评估.md），修复其全部 P0 并落地大部分 P1。
+
+### 数据安全（内核）
+- **台账错误不再吞**：`live_manifest_ids/vault_copies/undo_entries` Result 化；孤儿 GC 三保险（名单获取失败整段熔断跳过 / 新建目录 24h 宽限 / 进行中批次不碰）——杜绝台账异常时误删整个暂存区
+- **Vault 暂存 journal 化**：先落 `pending` 台账再动手、逐条 `committed`、全败回滚撤账；中途崩溃/掉电不再产生"台账外孤儿→被 GC 删除"的永久丢失路径（历史页对 pending 显示「未完成」警示）
+- **批次 id 唯一性**：手工暂存从秒级时间戳改随机熵；台账 upsert 不再 REPLACE 覆盖非空批次
+- **Guard 去硬编码**：禁删区由 `%SystemRoot%/%ProgramFiles%/%ProgramData%` 环境变量派生（非 C 系统盘获得同等保护）；USERPROFILE 缺失 → fail-closed 整批拒绝；自保护路径跟随 `ZC_DATA_DIR`
+- **提权白名单**：进程已提权时 vet 放行目录级精确白名单（系统 Temp / Windows Update 下载 / 传递优化 / Prefetch / 内核转储 / PerfLogs / 系统级 WER / CBS / WinREAgent 等 15 个窄前缀）——9 条 admin 规则从"永远清不掉"变为真实可用；结构测试强制 admin 规则根 ⊆ 白名单
+- **启动项管家**：备份先落盘成功再删注册表值（删失败回滚备份）；REG_EXPAND_SZ 类型保真；新增单条恢复 `enable_one`；备份损坏显式报错不再伪装为空
+
+### 可清理面（60 → 70 条规则）
+- **清空回收站**：体检台新卡片（SHQueryRecycleBinW 容量 + SHEmptyRecycleBinW 两段式确认清空，实测释放字节入账）
+- 新规则 ×10：系统级 WER、Windows\Logs\DiskDiagnostic、WinREAgent、更新 ReportingEvents.log、WinINet/旧 IE 缓存、Java Deployment 缓存、**pnpm store**（真·大户）、旧版 npm-cache、VS Code 运行缓存、Firefox 崩溃报告；Chrome 扩 Beta/Dev，Brave/Opera 补齐 Code Cache+GPUCache，Vivaldi 多 profile
+- 规则路径全面 `%WINDIR%/%SystemDrive%/%TEMP%` 派生（系统盘/Temp 改址用户不再失灵）；`min_age_days` 新维度——Temp/WER 默认只清 7 天前（年龄拿不准保守跳过）；Playwright→Caution、内核转储→Risky
+
+### 性能与正确性
+- 扫描引擎 jwalk rayon 并行 + 线程局部自底向上聚合（消灭每文件×深度的全局锁热点），"并行 Walk"名副其实
+- 体积树/重复文件/雷达改**实际占用的磁盘簇口径**（GetCompressedFileSizeW）：稀疏文件（WSL/VHDX）不再虚报；硬链接 (volume,file_id) 归并；reparse/云占位文件跳过防触发云端水合
+- 大文件/重复文件/体积树查询接入忙任务取消（`cancel_busy`）；SQLite 开 WAL；深目录操作迭代器栈化；暂存复制保 mtime；被占用文件的回收站失败改走"重启后删除"队列（reboot.rs 由死代码接线进链路）
+
+### 壳与 IPC（24 → 29 命令）
+- **错误通道结构化**：全命令 `ErrorDto{code,message}`（guard/cancelled/admin_required/not_found/busy/locked/io），前端按 code 分流，中文子串嗅探退役
+- undo/purge/migrate_undo 返回结构化结果；migrate_undo 移出主线程；migrate_apply/DISM/还原点在失败路径同样失效雷达体积树缓存；`vault_delete` journal 化且合并双跑实测
+- 单实例插件（二次启动聚焦已有窗口）；取消世代槽修 cancel↔reset 竞态；scan 进度监听泄漏修复；sweep/worker/关键操作全部写 zc-app.log；新增 query/empty_recycle_bin、session_entries、startup_list_disabled/enable_one、cancel_busy；scan_now 支持 include_admin（仅提权生效）；CSP 收紧、NSIS 中文、窗口主题不再硬锁
+
+### 界面（闭环与诚信）
+- **结果页可再入**（侧栏「体检结果」，report 在就能回）；危险操作言行一致：执行两段式确认 + 非安全档需展开明细后方可勾选
+- **历史页**：还原/彻底删除后自动刷新（幽灵行绝迹）；mode 筛选 chips；批次明细下钻（真实台账 entries）；迁移记录可直接从历史页撤销（兑现 v4 toast 承诺）
+- 体检台：删除 160MB 假分母（扫描环改诚实不定态）；管理员扫描开关；磁盘环点击直达雷达；清理遮罩不再每 1.4s 重挂（spinner 不重启）、文案诚实、显示已用时长；1.2s 假垫时删除；战报横幅持久化
+- 启动项单条恢复；错误不再伪装空态（启动项/深度工具）；重复文件每组可选保留份；大文件行删二次确认；表单 Enter 提交；命令面板打分匹配+焦点陷阱；雷达分区选择器；雷达色块键盘可达与选中环；迁移中心切页不丢进度
+
+### 设计系统 v4（浅色救援 + 动效收编）
+- 浅色主题系统性补课：25 组令牌全量双主题、文字用途 `--zc-accent-text/--zc-danger-text`（AA 对比度）、阴影 light 覆盖、`--zc-hover`（导航 hover 浅色不再蒸发）、主题首帧 bootstrap 脚本（消冷启动闪深空）
+- 动效词汇表收编：pulseDot/overlayIn/overlayOut/Crossfade 新增、时长令牌真实消费、`.zc-press` 按压态、`.zc-lift` 死码删除、手写渐变复制清零
+- 组件：RollNumber 中断续跑（motionValue 直写 DOM）；Toast 关闭钮 + hover 暂停进度线；Ring useId；Treemap hover 容器级事件委托 + memo + 固定时长过渡（tile 级四轴弹簧 layout thrash 终结）
+
+### CLI（自动化就绪）
+- `scan --json FILE`、新增 `bigfiles`、`dupes --json`、`sweep --days N`；**退出码约定 0 全成 / 1 错误 / 2 部分失败 / 3 取消**；help 补全全部子命令并删 selftest 幽灵
+- 提权链路加固：PowerShell `-EncodedCommand`（免疫引号注入/路径撇号）、结果文件原子写 + nonce 绑定、worker 猝死存活检测（不再干等 15 分钟）、catch_unwind 必写结果、UAC 拒绝→exit 3
+
+### 工程质量
+- Rust 测试 47 → **91 全绿**：新增 vault_journal 回归网（目录仅 rename/复制回滚/journal 状态流转/GC 熔断）、guard 提权白名单语义与 8.3 短名/非 C 盘派生、startup 备份往返（`ZC_STARTUP_BACKUP` 注入）、scanner 大小写混排吞并/skipped/min_age、规则-白名单双向一致性、ErrorDto 映射、EncodedCommand
+- QA 升级：三套 GUI QA 改**三态计数（PASS/SKIP/FAIL，SKIP 不再记绿）** + 报告头 git SHA/exe 哈希 + 失败自动截图 + CDP 分帧重组/断线重连；启动项用例锁定夹具行（不再误碰用户真实启动项）；新增 **qa_new_features.py**（回收站/分区切换/历史下钻/筛选/取消/错误横幅）与 **qa_cli.py**（ZC_DATA_DIR 隔离的全 CLI 链回归）
+- 文档纠偏：rules.md 重生成 70 条、README 重写、CHANGELOG 补齐 v3.0.1–v5.0.0 共 9 个版本、portable/ROADMAP/HANDOVER 同步
+
+## [v4.1.0] - 2026-08-31 · 设计系统 v3「精装版」
+
+- 氛围光深空背景、品牌渐变令牌、三档海拔体系；页面转场微缩放上浮；Toast 状态色章+左缘色条+生命周期进度线；Ring 渐变描边+辉光；侧栏 logo 光晕徽章+品牌发丝线+版本徽章+导航 hover；骨架屏流光(shimmer)替换脉冲；主 CTA 光泽扫过；清理遮罩玻璃化+发丝线；战报横幅精装；滚动条 hover 态+主题切换过渡
+- docs/HANDOVER.md 项目交接文档（仓库地图/架构契约/构建测试发布流程/CDP 自动化约定/踩坑实录/上手清单）
+
+## [v4.0.0] - 2026-08-31 · 大版本：每个页面都能安全动手
+
+- **vault_delete 统一链路**：守卫 fail-closed → 暂存区 → 台账可还原；大文件行级「暂存区」、重复文件组级「清理冗余份数」、雷达选中「移入暂存区」、工具箱「安全删除」任意路径入口
+- 迁移后台化（store 全局任务，切页不中断，侧栏指示+全局通知）；雷达体积树缓存（二次进入零等待，写操作全量失效）
+- 体检台扫描实时耗时+速率；构建计划 codegen-units=1；scripts/qa_v4.py 五项新能力 QA
+
+## [v3.0.6] - 2026-08-31 · 雷达配色重做
+
+- 8 色相低饱和精选调色板（顶层按路径哈希取色，同目录恒定同色形成空间记忆）；下钻子块继承父色相±微漂移成家族色；明度随层级/体量节奏变化；块面纵向渐变+顶部高光+悬浮色相光环；白字加投影保证任何底色可读；缝隙 1px→2px
+
+## [v3.0.5] - 2026-08-31 · 三处真实缺陷修复
+
+- vault 暂存目录被占用时「复制成功+删源失败」不留无账副本——目录只做原子 rename，文件复制失败回滚副本；记账改副本实测字节（活目录扫描→清理窗口增长不再对不上账）；扫描取消令牌生命周期跟随一次扫描（取消过一次不再毒死后续所有扫描）
+
+## [v3.0.4] - 2026-08-31 · 补全「真实释放」链路
+
+- vault 批次可彻底删除（purge_session / zclean purge / 历史页按钮）；7 天后悔期到期自动清扫（sweep+孤儿会话 GC）；副本已不存在按目标达成计不再卡死台账；修复历史页假 session_id（第一行还原/彻底删除永远报台账不存在）；侧栏版本号改读真实应用版本；scripts/qa_drive.py CDP 全功能 QA 驱动
+
+## [v3.0.3] - 2026-08-30 · 迁移与回收站修复
+
+- 迁移 junction 路径修复 + undo 数据搬回 + 回收站逐文件降级（批量被个别锁定文件拖垮时不再整批失败）
+
+## [v3.0.2] - 2026-08-30 · 雷达黑屏修复
+
+- 空间雷达黑屏修复 + 清理链路兜底
+
+## [v3.0.1] - 2026-08-30 · 进度与性能修复
+
+- 修复体检台进度卡 0% 与空间雷达卡死；build_tree 性能重写 4m22s → 1m05s（三段式自底向上聚合）
+
+## [v3.0.0] - GA 正式版
+
+- **GA#5 安全 property fuzz**：确定性 LCG 生成畸形路径（大小写/\?\ 前缀/尾点尾空格/../混合分隔符/UNC 管理共享）
+  轰炸守卫——禁删区 160 次变异零放行；良性变体（大小写/分隔符）零误伤；norm 幂等性成立
+- **GA#4 winget manifest 就绪**：manifests/ 三件套（installer 校验和占位待 GA 上传后回填）
+- 深度工具直达入命令面板； soak 72h 列为运行手册项（hotfix 走 patch 号）
+- 全仓测试 46 个全绿（MSVC 链）
 ## [v3.0.0-beta.6.dev] - GA #2 深度工具卡
 
 - **三张能力卡**：WinSxS 组件清理（DISM /StartComponentCleanup 官方通道）、
@@ -17,7 +106,6 @@
   UI 层引导「以管理员重启应用」或 zclean apply --admin 提权批
 - 内核 zc-core::system 新增 `OccupancyItem` + `system_occupancy()`（含单测）；
   侧栏新增「深度工具」（ShieldCheck），工具箱深工卡改「见左侧栏」可点直达
-
 ## [v3.0.0-beta.5.dev] - GA 清单 #1：大文件/重复文件页点亮
 
 - **内核与命令**：zc-core 新增 `largest_files`（jwalk 单遍遍历 + BinaryHeap 小顶堆 top-N
@@ -29,15 +117,6 @@
   RollNumber 滚动展示可回收合计（Σ size×(份数-1)）；组卡片标「N 份 × humanSize ·
   建议保留最新」并给出保留建议行；空态贴实跑门限
 - CLI（zc-cli dedup 子命令）与 UI 走同源内核管道，浏览器演示态提供同构样例数据
-
-## [v3.0.0] - GA 正式版
-
-- **GA#5 安全 property fuzz**：确定性 LCG 生成畸形路径（大小写/\?\ 前缀/尾点尾空格/../混合分隔符/UNC 管理共享）
-  轰炸守卫——禁删区 160 次变异零放行；良性变体（大小写/分隔符）零误伤；norm 幂等性成立
-- **GA#4 winget manifest 就绪**：manifests/ 三件套（installer 校验和占位待 GA 上传后回填）
-- 深度工具直达入命令面板； soak 72h 列为运行手册项（hotfix 走 patch 号）
-- 全仓测试 46 个全绿（MSVC 链）
-
 ## [v3.0.0-beta.4] - 诚实口径修复 · 真机实测暴露并解决
 
 - **目录命中体积口径修复**：目录级命中在扫描期即聚合整棵子树字节
@@ -47,7 +126,6 @@
   锁定文件（显卡驱动占用的 D3DSCache）优雅跳过并列清单
 - 测试 41 全绿（e2e 新增“未命中子孙随目录计入”断言）；测试基础设施新增
   scripts/msvc-test.cmd（bundled sqlite 的 C 链在 MSVC 下全仓可测）
-
 ## [v3.0.0-beta.3] - 应用内更新上线
 
 - **tauri-updater 接入**：Ed25519 签名（私钥存库外 %USERPROFILE%\.tauri\，已 gitignore），
@@ -55,7 +133,6 @@
   （检查→发现新版→下载安装，重启生效文案明示）
 - 打包链新增签名步骤：scripts/msvc-tauri-build.cmd 由 %USERPROFILE%\.tauri\ 提供密钥环境
 - 发布产物三件套：安装器 / .sig 签名 / latest.json
-
 ## [v3.0.0-beta.2.dev] - 工具箱 UI 点亮（启动项 + 迁移中心）
 
 - **SQLite 台账迁移（ADR-002 收口）**：清理台账与历史由 JSON/JSONL 迁入单文件
@@ -80,7 +157,6 @@
   提供「在资源管理器打开」（桌面壳 reveal_in_explorer 直启 explorer.exe，浏览器态隐藏）
   与「作为迁移源」两动作；跨页联动经 store —— activePage 路由提升进全局态，
   选中节点写入 pendingMigrateSrc 后自动切至迁移中心预填源目录，生成计划即清空
-
 ## [v3.0.0-beta.1] - MSVC 贯通 · 应用二进制产出
 
 - **壳层编译贯通**：VS Build Tools VCTools 工作负载补装后，tauri 全依赖树
@@ -96,7 +172,6 @@
   已预构建 exe 无需重编译（增量）
 - 前端新增「空间雷达」页（子代理交付）：Squarified Treemap 下钻/面包屑，
   算法经独立复算验证（覆盖率 100%、零重叠）
-
 ## [v3.0.0-beta.wip] - 六件套内核四连发
 
 ### 新增（zc-core 新模块）
@@ -116,7 +191,6 @@
   startup 枚举健壮性等用例）；clippy 保持零告警
 - 真机冒烟：startup 列出真实 Run 键、tree 用户目录 49GB 分布、dupes 夹具命中、
   migrate plan 对 D 盘试运行（只读）全部通过
-
 ## [v3.0.0-alpha.1] - 从零重构 · 内核与规则库可用
 
 架构彻底换代：Python/tkinter → Rust 内核（zc-core）+ Tauri 2 外壳 + React 前端。
@@ -165,7 +239,6 @@
 - 本机实扫（60 规则全量）：16,418 文件遍历 2.1s，清理发现 151.56MB / 2,600 项，
   其中新增规则贡献约 80MB（AMD 着色器缓存、pnpm/uv/node-gyp 等）
 - 单元 + 集成 + 夹具测试 26 个全绿；clippy --all-targets 零告警
-
 ## [v2.5.0] - 深色回归
 
 ### 回退
@@ -178,7 +251,6 @@
 - 保留 v2.3.0 / v2.4.0 的全部功能修复：自保护路径、回收站真实释放语义、
   应用占用检测、系统级占用检测、搬家逻辑、历史口径、分析页局部刷新等
 - 保留提升对比度后的浅灰文字（次级 #B7C1D3 / 弱化 #98A2B8），深底清晰可读
-
 ## [v2.4.0] - 浅色改版
 
 ### 改版
@@ -192,7 +264,6 @@
 - 程序搬家：Docker（WSL 虚拟盘）与微信（运行时锁定文件）不再尝试自动迁移，只做重定向设置 + 手动指引
 - 清理历史：新增 `real_freed` 字段，"累计释放"只统计真实释放（永久删除或含清空回收站），不再夸大战果
 - 磁盘分析：手动删除文件后局部刷新结果，不再触发全盘重扫
-
 ## [v2.3.0] - 效果与安全
 
 ### 新增
@@ -206,7 +277,6 @@
 - 清理规则 46 → 48：新增 NVIDIA 驱动下载缓存、JetBrains 索引缓存；Chrome/Edge 并入 Crashpad 崩溃报告
 - 目录遍历改为 os.scandir 栈式实现（Windows 下枚举自带文件属性，冷缓存时每文件少一次系统调用）
 - 安全校验加固：禁删清单补上 C:\Windows 本身
-
 ## [v2.2.0] - 动效升级
 
 ### 新增
@@ -216,7 +286,6 @@
 - 清理进行中确定进度条叠加流光
 - 规则行悬停强调条
 - 仪表盘数字滚动、磁盘环形仪表动画
-
 ## [v2.1.0] - 功能扩展
 
 ### 新增
@@ -227,7 +296,6 @@
 - **一键智能清理**：自动扫描 → 勾选安全项 → 清理
 - **排除目录**：自定义目录不扫描不清理，设置持久化
 - **重复文件保留最新**策略（按修改时间）
-
 ## [v2.0.0] - 完全重构
 
 基于对原版 ZDiskCleaner 的逆向分析（PyInstaller 解包 + 字节码反编译）完全重写。

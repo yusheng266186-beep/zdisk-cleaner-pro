@@ -64,7 +64,7 @@ impl CleanManifest {
             ));
         }
         let moved: Vec<(PathBuf, PathBuf)> = crate::ledger::LedgerStore::open()?
-            .undo_entries(&self.id)
+            .undo_entries(&self.id)?
             .into_iter()
             .map(|(origin, vault_rel)| (PathBuf::from(origin), PathBuf::from(vault_rel)))
             .collect();
@@ -81,7 +81,7 @@ impl CleanManifest {
                 "回收站批次没有 vault 副本，请在系统回收站中清空".into(),
             ));
         }
-        let copies = crate::ledger::LedgerStore::open()?.vault_copies(&self.id);
+        let copies = crate::ledger::LedgerStore::open()?.vault_copies(&self.id)?;
         let mut deleted = 0usize;
         let mut freed = 0u64;
         let mut failed: Vec<(String, String)> = Vec::new();

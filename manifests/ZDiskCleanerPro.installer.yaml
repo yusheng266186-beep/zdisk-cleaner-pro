@@ -1,11 +1,11 @@
 PackageIdentifier: yusheng266186-beep.ZDiskCleanerPro
-PackageVersion: 3.0.0
+PackageVersion: 5.0.0
 Channel: stable
 Installers:
   - Architecture: x64
     InstallerType: nullsoft
-    InstallerUrl: https://github.com/yusheng266186-beep/zdisk-cleaner-pro/releases/download/v3.0.0/ZDiskCleanerPro_3.0.0_x64-setup.exe
-    InstallerSha256: PENDING_FILL_AT_RELEASE
+    InstallerUrl: https://github.com/yusheng266186-beep/zdisk-cleaner-pro/releases/download/v5.0.0/ZDiskCleanerPro_5.0.0_x64-setup.exe
+    InstallerSha256: acf0d972f139aa4a9d5167f86e53ca499f88af721c5171c75e9d59b847d54dd4
     InstallerSwitches:
       Silent: /S
 ManifestType: installer

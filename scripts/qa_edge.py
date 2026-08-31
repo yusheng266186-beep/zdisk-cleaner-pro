@@ -1,8 +1,10 @@
 # -*- coding: utf-8 -*-
 """ZDiskCleaner Pro 边界/异常路径 QA 驱动(第二轮:专打 happy path 之外)。
 
-覆盖:规则展开、空勾选守卫、取消扫描、重复文件真实夹具、迁移非法路径、
-雷达选中跨页跳转、清理→撤销闭环、刷新后状态持久化。
+覆盖:规则展开、空勾选守卫(v5:必须点 results-exec 才触发)、取消扫描、
+重复文件真实夹具、迁移非法路径、雷达选中跨页跳转(data-k 元素级选中)、
+清理→撤销闭环(v5:两段式执行 + 遮罩同一元素 + 还原后 History 行自动消失)、
+刷新后状态持久化。
 """
 import json
 import os
@@ -12,7 +14,9 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from qa_drive import (CDP, S, goto, click_text, wait_expr, wait_toast, toasts,
-                      native_set_input, probe, log, IMPL, REPORT, PAGE_IDS)
+                      native_set_input, probe, log, IMPL, REPORT, PAGE_IDS,
+                      results_exec, overlay_arm, overlay_check, EXEC_SEL)
+from qa_drive import qa_lock, run_steps, write_report, summarize
 
 REPORT.clear()
 
@@ -55,16 +59,21 @@ def edge_expand_rule(cdp):
 
 
 def edge_empty_selection_guard(cdp):
-    """清空勾选后点清理 → 应 warn 且不进入清理态、不崩溃。"""
+    """清空勾选后点 results-exec → v5 起空守卫必须点执行钮才触发:
+    应 warn 且不进入清理态、不崩溃。"""
     t0 = time.time()
     click_text(cdp, "清空勾选")
     n = cdp.evaluate(f"({S}).selection.size")
     assert n == 0, f"清空后仍有勾选: {n}"
-    click_text(cdp, "暂存区")
+    before = toasts(cdp)
+    # 空勾选一段点击即 warn;不用 results_exec(8s armed 轮询会耗尽 4.2s toast 窗口)
+    cdp.evaluate(f"document.querySelector({json.dumps(EXEC_SEL)})?.click()", timeout=20)
     msg = wait_toast(cdp, "请至少选择一条规则", timeout=15, desc="empty guard")
     phase = cdp.evaluate(f"({S}).phase")
     assert phase == "results", f"空勾选竟改变了状态: {phase}"
-    IMPL(step="empty_selection_guard", ok=True, secs=round(time.time() - t0, 1), toast=msg)
+    assert not cdp.evaluate(f"({S}).cleanOutcome && ({S}).phase === 'cleaning'"), "空勾选竟进入清理"
+    IMPL(step="empty_selection_guard", ok=True, secs=round(time.time() - t0, 1), toast=msg,
+         trigger="results-exec(两段式)", toasts_before=len(before or []))
     log(f"empty_selection_guard OK · {msg}")
 
 
@@ -81,8 +90,8 @@ def edge_cancel_scan(cdp):
     if not cancelled:
         phase = cdp.evaluate(f"({S}).phase")
         assert phase in ("results", "idle"), f"取消按钮消失且状态异常: {phase}"
-        IMPL(step="cancel_scan", ok=True, secs=round(time.time() - t0, 1),
-             toast="(扫描过快完成,取消路径未触发)")
+        IMPL(step="cancel_scan", status="SKIP", secs=round(time.time() - t0, 1),
+             skipped=f"扫描过快完成({phase}),取消按钮已消失,取消路径未触发")
         log(f"cancel_scan SKIP · 扫描过快完成({phase}),取消按钮已消失")
         return
     msg = wait_toast(cdp, "已请求取消", timeout=15, desc="cancel toast")
@@ -125,6 +134,8 @@ def edge_migrate_invalid_src(cdp):
     """迁移源不存在 → 诚实报错,不崩溃、不生成计划。"""
     t0 = time.time()
     goto(cdp, "迁移中心")
+    cdp.evaluate(f"({S}).resetMigrateWizard(); 0", timeout=20)  # 清上套件遗留 done 态(单实例 store 持久)
+    time.sleep(0.3)
     native_set_input(cdp, "(i.placeholder || '').includes('npm-cache')", r"C:\Temp\zc-no-such-dir-42")
     native_set_input(cdp, "(i.placeholder || '').includes('E:')", r"C:\Temp")
     click_text(cdp, "生成迁移计划")
@@ -136,38 +147,28 @@ def edge_migrate_invalid_src(cdp):
 
 
 def edge_radar_cross_page(cdp):
-    """雷达 shift+点击最大块 → 选中条出现 → 「作为迁移源」跨页预填表单。"""
+    """雷达 shift+点击最大块 → 选中条出现 → 「作为迁移源」跨页预填表单。
+
+    v5:treemap 色块带 data-k=<key>,改用元素级 dispatchEvent MouseEvent——
+    规避 WebView2 高 DPI 下 CDP Input 坐标换算歧义与遮挡残影。"""
     t0 = time.time()
     goto(cdp, "空间雷达")
     wait_expr(cdp, "document.body.innerText.includes('个文件')", 300, interval=1.0, desc="radar tree")
-    from qa_drive import _cdp_input_mouse
-    host_rect = json.loads(cdp.evaluate(
-        "JSON.stringify(document.querySelector('.min-h-40.flex-1').getBoundingClientRect())"))
-    big = json.loads(cdp.evaluate(
+    hit = json.loads(cdp.evaluate(
         """(() => {
             const host = document.querySelector('.min-h-40.flex-1');
-            let best = null;
+            if (!host) return JSON.stringify({ok: false, why: 'NO_HOST'});
+            let best = null, area = 0;
             for (const d of host.children) {
                 const st = getComputedStyle(d);
                 const w = parseFloat(st.width), h = parseFloat(st.height);
-                if (!best || w*h > best.w*best.h) best = { dx: d.offsetLeft + w/2, dy: d.offsetTop + h/2 };
+                if (w * h > area) { area = w * h; best = d; }
             }
-            return JSON.stringify(best);
+            if (!best) return JSON.stringify({ok: false, why: 'NO_TILE'});
+            best.dispatchEvent(new MouseEvent('click', {shiftKey: true, bubbles: true, cancelable: true}));
+            return JSON.stringify({ok: true, key: String(best.dataset.k ?? best.textContent).slice(0, 60)});
         })()""", timeout=30))
-    # shift+点击 → 选中(不下钻)
-    for typ in ("mousePressed", "mouseReleased"):
-        cdp.mid += 1
-        req = json.dumps({"id": cdp.mid, "method": "Input.dispatchMouseEvent", "params": {
-            "type": typ, "x": host_rect["x"] + big["dx"], "y": host_rect["y"] + big["dy"],
-            "button": "left", "clickCount": 1, "modifiers": 8}})
-        cdp._send_frame(0x1, req.encode())
-        time.sleep(0.3)
-        deadline = time.time() + 10
-        while time.time() < deadline:
-            payload = cdp._read_frame(10)
-            d = json.loads(payload.decode("utf-8", "replace"))
-            if d.get("id") == cdp.mid:
-                break
+    assert hit["ok"], f"色块元素级选中失败: {hit['why']}"
     time.sleep(0.8)
     selected = cdp.evaluate(
         "[...document.querySelectorAll('[role=status]')].some(e => e.innerText.includes('已选中'))")
@@ -180,37 +181,93 @@ def edge_radar_cross_page(cdp):
         "([...document.querySelectorAll('input')].find(i => (i.placeholder||'').includes('npm-cache')) || {}).value || ''",
         15, interval=0.5, desc="migrate prefill")
     assert prefill, f"迁移表单未预填: pendingMigrateSrc={cdp.evaluate(f'({S}).pendingMigrateSrc')!r}"
-    IMPL(step="radar_cross_page", ok=True, secs=round(time.time() - t0, 1), prefill=prefill[:60])
+    IMPL(step="radar_cross_page", ok=True, secs=round(time.time() - t0, 1), prefill=prefill[:60],
+         sel_mode="元素级 MouseEvent(data-k 色块)", sel_key=hit["key"])
     log(f"radar_cross_page OK · 选中→跳转迁移中心,预填 {prefill[:60]}")
 
 
+def _seed_old_temp():
+    """播种 mtime 回拨 10 天的 %TEMP% 文件,保证 sys-user-temp(Safe,min_age=7)有命中。"""
+    dd = os.environ.get("TEMP") or os.path.join(os.environ.get("LOCALAPPDATA", ""), "Temp")
+    old = time.time() - 10 * 86400
+    made = []
+    for k in range(5):
+        fp = os.path.join(dd, f"zc-qa-old-{int(time.time())}-{k}.tmp")
+        try:
+            with open(fp, "wb") as f:
+                f.write(os.urandom(320 * 1024))
+            os.utime(fp, (old, old))
+            made.append(fp)
+        except OSError:
+            pass
+    return made
+
+
 def edge_clean_undo_cycle(cdp):
-    """清理→战报横幅「反悔」→ 数据原样搬回,vault 归零差值。"""
+    """清理(results-exec 两段式 + 遮罩同一元素)→战报横幅「反悔」→
+    数据原样搬回、vault 回吐、且 History 行自动消失(v5 新行为)。"""
     t0 = time.time()
+    seeded = _seed_old_temp()
+    assert seeded, "无法播种 %TEMP% 过期夹具"
     v0 = vault_bytes()
     do_scan(cdp)
+    # 勾选只留播种规则(sys-user-temp):批次=自造 temp 文件,undo 必全成→走结清路径
+    # (混入环境命中时部分还原失败→台账按设计保留重试,结清断言就变成赌博)
+    cdp.evaluate(f"window.__zcStore.setState({{ selection: new Set(['sys-user-temp']) }}); 0", timeout=20)
+    time.sleep(0.3)
+    _sel = json.loads(cdp.evaluate(f"JSON.stringify([...({S}).selection])"))
+    assert _sel == ["sys-user-temp"], f"selection 收窄失败: {_sel}"
     guard = cdp.evaluate(
         f"JSON.stringify([...({S}).selection].filter(id => ({S}).rules.find(r => r.id === id)?.risk !== 'safe'))")
     assert json.loads(guard) == [], f"选中含非安全规则: {guard}"
-    click_text(cdp, "暂存区")
+    armed = results_exec(cdp)
+    assert armed, "results-exec 未进入「确认清理 N 项」二次确认态"
+    wait_expr(cdp, f"({S}).phase === 'cleaning'", 20, desc="cleaning phase")
+    overlay_arm(cdp)
+    time.sleep(2.0)
+    overlay_check(cdp)
     wait_expr(cdp, f"({S}).phase === 'idle' && ({S}).cleanOutcome", 600, interval=1.5, desc="clean done")
     oc = json.loads(cdp.evaluate(f"JSON.stringify((({S}).cleanOutcome ?? {{}}))"))
+    session = cdp.evaluate(f"({S}).lastSessionId")
     v1 = vault_bytes()
     grew = v1 - v0
     log(f"清理 {oc['done_files']} 项 / {oc['done_bytes']} 字节 · vault {v0/2**20:.0f}→{v1/2**20:.0f}MB")
     assert grew >= oc["done_bytes"] * 0.9 or oc["done_bytes"] == 0, \
         f"vault 增量 {grew} 与账面 {oc['done_bytes']} 严重不符"
-    # 战报横幅反悔
+    # 战报横幅反悔(toast 为结构化「已还原 N 项」)
     click_text(cdp, "反悔 · 一键还原本批")
-    wait_toast(cdp, "已还原", timeout=300, desc="undo toast")
+    undo_toast = wait_toast(cdp, "已还原", timeout=300, desc="undo toast")
     time.sleep(1.5)
     v2 = vault_bytes()
     log(f"撤销后 vault {v2/2**20:.0f}MB(回收 {grew - (v2 - v0):.0f} 字节级)")
     assert v2 <= v1 - grew * 0.9, f"撤销后 vault 未回吐: {v1}->{v2}"
+    # v5.0 结清断言:undo 成功后 History 自动刷新——该 session 行必须变为「已还原」
+    # 结清徽标且还原/彻底删除按钮消失(流水保留审计,死按钮绝迹);行整体移除亦接受
+    if session:
+        # 结清徽标在 History 页 DOM——必须导航过去再查(undo toast 发生在 home 战报横幅上)
+        goto(cdp, "历史")
+        wait_expr(cdp, f"!!({S}).history.length", 15, desc="history rows")
+        settled = cdp.evaluate(
+            f"""!!document.querySelector('[data-testid="settled-{session}"]')""")
+        row_actionable = cdp.evaluate(
+            f"""[...document.querySelectorAll('li[data-session="{session}"]')]
+                .some(l => [...l.querySelectorAll('button')].some(b => b.innerText.includes('还原') || b.innerText.includes('详情')))""")
+        hist_settled = cdp.evaluate(
+            f"({S}).history.some(h => h.session_id === {json.dumps(session)} && (h.kind === 'undo' || h.live === false))")
+        assert settled and not row_actionable, \
+            f"还原后 History 未结清:session {session}(badge={settled} 仍可动作={row_actionable})"
+        assert hist_settled, f"store.history 未反映结清(live/kind):{session}"
+    for sp in seeded:
+        try:
+            os.remove(sp)
+        except OSError:
+            pass
+    assert oc["done_files"] >= len(seeded), f"清理项数 {oc['done_files']} < 播种夹具数 {len(seeded)},链路未真正搬运"
     IMPL(step="clean_undo_cycle", ok=True, secs=round(time.time() - t0, 1),
-         done_files=oc["done_files"], done_bytes=oc["done_bytes"],
-         vault_mb=[round(v0 / 2**20), round(v1 / 2**20), round(v2 / 2**20)])
-    log(f"clean_undo_cycle OK · {oc['done_files']} 项 / {oc['done_bytes']/2**20:.1f}MB 清理→撤销闭环 ✓")
+         done_files=oc["done_files"], done_bytes=oc["done_bytes"], session=session,
+         undo_toast=str(undo_toast)[:60], exec_mode="results-exec 两段式",
+         overlay_same_node=True, history_row_settled=bool(session))
+    log(f"clean_undo_cycle OK · {oc['done_files']} 项 / {oc['done_bytes']/2**20:.1f}MB 清理→撤销→History 结清徽标 ✓")
 
 
 def edge_reload_persistence(cdp):
@@ -238,6 +295,7 @@ def edge_reload_persistence(cdp):
 
 
 def main():
+    qa_lock("qa_edge")
     cdp = CDP()
     cdp.evaluate(f"{S}.togglePalette(false); {S}.setActivePage('home'); 0", timeout=30)
     time.sleep(0.5)
@@ -249,29 +307,24 @@ def main():
     try:
         do_scan(cdp)
     except Exception as e:
+        from qa_drive import capture_fail
+        shot = capture_fail(cdp, "pre_scan")
         failures.append(("scan", str(e)[:200]))
+        IMPL(step="pre_scan", status="FAIL", error=str(e)[:300], screenshot=shot)
         log(f"✗ 前置扫描失败: {e}")
-    for fn in steps:
-        try:
-            fn(cdp)
-        except Exception as e:
-            failures.append((fn.__name__, str(e)[:300]))
-            IMPL(step=fn.__name__, ok=False, error=str(e)[:300])
-            log(f"✗ {fn.__name__}: {str(e)[:300]}")
+    failures += run_steps(cdp, steps)
     try:
         cdp = edge_reload_persistence(cdp) or cdp
     except Exception as e:
+        from qa_drive import capture_fail
+        shot = capture_fail(cdp, "reload_persistence")
         failures.append(("reload_persistence", str(e)[:300]))
-        IMPL(step="reload_persistence", ok=False, error=str(e)[:300])
+        IMPL(step="reload_persistence", status="FAIL", error=str(e)[:300], screenshot=shot)
         log(f"✗ reload_persistence: {str(e)[:300]}")
     tag = time.strftime("%H%M%S")
     path = rf"C:\Temp\zc-qa-edge-{tag}.json"
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump({"steps": REPORT, "failures": failures}, f, ensure_ascii=False, indent=1)
-    log(f"===== 边界 QA 完成: {len(REPORT) - len(failures)}/{len(REPORT)} 通过 · 报告 {path} =====")
-    for name, err in failures:
-        log(f"  ✗ {name}: {err}")
-    return 1 if failures else 0
+    write_report(path, failures)
+    return summarize("边界 QA", path)
 
 
 if __name__ == "__main__":

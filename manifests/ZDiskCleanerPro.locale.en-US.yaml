@@ -1,13 +1,14 @@
 PackageIdentifier: yusheng266186-beep.ZDiskCleanerPro
-PackageVersion: 3.0.0
+PackageVersion: 5.0.0
 PackageLocale: en-US
 Publisher: yusheng266186-beep
 PackageName: ZDiskCleaner Pro
 License: MIT
 ShortDescription: Safe disk space manager — indexed scan, guarded cleanup, reversible vault.
 Description: |-
-  ZDiskCleaner Pro v3 is a Rust-core disk space manager: single-pass parallel scan,
-  60 guarded cleanup rules, seven-day reversible vault, elevation worker, treemap radar,
+  ZDiskCleaner Pro v5 is a Rust-core disk space manager: single-pass parallel scan,
+  70 guarded cleanup rules, a journaled seven-day reversible vault, elevation worker,
+  recycle-bin emptying, treemap radar,
   duplicate finder, storage migration center and in-app updates.
 ManifestType: defaultLocale
 ManifestVersion: 1.6.0

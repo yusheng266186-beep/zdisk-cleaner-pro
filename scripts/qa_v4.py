@@ -39,11 +39,17 @@ def v4_tools_safedelete(cdp):
     t0 = time.time()
     target = os.path.join(FIX, "sub", "nested.bin")
     goto(cdp, "工具箱")
+    wait_expr(cdp, "!!document.querySelector('[data-testid=safedel-exec]')", 20, desc="safedel 卡挂载")
+    cdp.evaluate("window.__zcStore.setState({ toasts: [] }); 0", timeout=20)  # 清残留 toast,防假阳性
     from qa_drive import native_set_input
     native_set_input(cdp, "(i.placeholder || '').includes('某目录')", target)
-    click_text(cdp, "移入暂存区")
-    time.sleep(0.4)
-    click_text(cdp, "再点一次确认", timeout=6)
+    # click_text("移入暂存区") 会命中工具箱导航卡描述文本(→误跳大文件页);用专属 testid 两段点击
+    time.sleep(0.3)
+    cdp.evaluate("document.querySelector('[data-testid=safedel-exec]')?.click()", timeout=20)
+    time.sleep(0.5)
+    armed = wait_expr(cdp, "(()=>{const b=document.querySelector('[data-testid=safedel-exec]');return b&&b.innerText.includes('再点一次确认') ? true : undefined})()", 8, desc="safedel armed")
+    assert armed, "safedel-exec 未进入「再点一次确认」armed 态"
+    cdp.evaluate("document.querySelector('[data-testid=safedel-exec]').click()", timeout=20)
     wait_expr(cdp, f"({S}).toasts.some(t => t.msg.includes('已移入暂存区'))", 30, desc="safe-delete toast")
     time.sleep(0.8)
     assert not os.path.exists(target), "文件未被搬走"
@@ -71,11 +77,25 @@ def v4_bigfiles_stash(cdp):
             const spans = [...document.querySelectorAll('main span[title]')];
             const hit = spans.find(s => s.title === %s);
             if (!hit) return false;
-            const btn = [...hit.parentElement.querySelectorAll('button')].find(b => b.textContent.includes('暂存区'));
+            const btn = [...hit.parentElement.querySelectorAll('button')].find(b => b.textContent.includes('暂存区') || b.textContent.includes('再点一次'));
             if (!btn) return false;
             btn.click(); return true;
         })()""" % json.dumps(target), timeout=20)
     assert clicked, "找不到该行的暂存区按钮"
+    # v5 行级两段式:一次点击仅 arm,文案变「再点一次确认」后再点才真正搬运
+    armed = wait_expr(cdp,
+        """(() => {
+            const spans = [...document.querySelectorAll('main span[title]')];
+            const hit = spans.find(s => s.title === %s);
+            return hit && [...hit.parentElement.querySelectorAll('button')].some(b => b.textContent.includes('再点一次确认'));
+        })()""" % json.dumps(target), 8, desc="stash armed")
+    assert armed, "行级暂存未进入「再点一次确认」armed 态"
+    cdp.evaluate("""(() => {
+        const spans = [...document.querySelectorAll('main span[title]')];
+        const hit = spans.find(s => s.title === %s);
+        const btn = hit && [...hit.parentElement.querySelectorAll('button')].find(b => b.textContent.includes('再点一次确认'));
+        if (btn) btn.click(); return !!btn;
+    })()""" % json.dumps(target), timeout=20)
     wait_expr(cdp, f"({S}).toasts.some(t => t.msg.includes('已移入暂存区'))", 30, desc="stash toast")
     time.sleep(0.8)
     row_after = cdp.evaluate(
@@ -181,8 +201,12 @@ def v4_migrate_background(cdp):
     assert junction and os.path.isdir(os.path.join(dstroot, "zc-v4-mig")), "junction/目标未落地"
     # 收尾:CLI 撤销迁移 + 清夹具
     import subprocess
-    exe = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                       "target", "release", "zclean.exe")
+    from qa_drive import cargo_release_dir
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    _c = [os.path.join(cargo_release_dir(), "zclean.exe"), os.path.join(root, "target", "release", "zclean.exe")]
+    _c = [c for c in _c if os.path.exists(c)]
+    assert _c, "找不到 zclean.exe(target-dir 重定向未覆盖)"
+    exe = max(_c, key=os.path.getmtime)
     subprocess.run([exe, "migrate", "undo", src_d], capture_output=True, timeout=120)
     shutil.rmtree(src_d, ignore_errors=True)
     shutil.rmtree(dstroot, ignore_errors=True)

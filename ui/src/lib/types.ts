@@ -58,6 +58,64 @@ export interface HistoryRecord {
   mode: "recycle_bin" | "vault";
   files: number;
   bytes_moved: number;
+  /** v5：批次类别（vault / recycle_bin / system / migrate）。缺省时以 mode 归类 */
+  kind?: string;
+  /** v5：迁移批次的源路径 */
+  src?: string | null;
+  /** v5：迁移批次的目标路径 */
+  dst?: string | null;
+  /** v5：台账行是否存活。false=已结清（还原/彻底删除/到期清扫），历史页隐藏动作；
+   *  缺省（浏览器演示态）按存活处理 */
+  live?: boolean;
+}
+
+/* ── v5 结构化 DTO（CONTRACT-v5 §2，serde snake_case 直传）────────── */
+
+/** ErrorDto：全壳统一错误分类（io/guard/admin_required/not_found/busy/locked/cancelled/internal） */
+export interface FailDto {
+  path: string;
+  error: string;
+}
+
+/** UndoResultDto / SessionOpDto（undo_session、purge_session 复用） */
+export interface UndoResultDto {
+  id: string;
+  done: number;
+  bytes: number;
+  failed: FailDto[];
+}
+
+/** MigrateUndoDto */
+export interface MigrateUndoDto {
+  restored: number;
+  failed: FailDto[];
+}
+
+/** SessionEntryDto：批次明细下钻（status=pending 为 journal 未完成警示） */
+export interface SessionEntryDto {
+  origin: string;
+  vault_rel: string;
+  size: number;
+  status: string;
+}
+
+/** RecycleBinInfo（query_recycle_bin） */
+export interface RecycleBinInfo {
+  items: number;
+  bytes: number;
+}
+
+/** RecycleBinSummary（empty_recycle_bin） */
+export interface RecycleBinSummary {
+  items_before: number;
+  bytes_before: number;
+  bytes_freed: number;
+}
+
+/** StartupDisabledEntry（startup_list_disabled） */
+export interface StartupDisabledEntry {
+  key_id: string;
+  value: string;
 }
 
 export const DOMAIN_ZH: Record<Domain, string> = {

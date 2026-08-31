@@ -10,8 +10,8 @@ env:
 
 jobs:
   rust-core:
-    # 纯逻辑内核（zc-core / zc-rules / zc-cli）在 GNU 工具链即可验证，
-    # 与本机开发环境一致；Tauri 壳构建放到 release job（MSVC）。
+    # 纯逻辑内核（zc-core / zc-rules / zc-cli）在本机与 CI 统一走 MSVC 工具链验证；
+    # Tauri 壳链接与打包放本机 scripts/msvc-*.cmd（发版流程 §7）。
     name: Rust core (msvc)
     runs-on: windows-latest
     steps:

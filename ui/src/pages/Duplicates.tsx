@@ -1,20 +1,24 @@
 import { useState } from "react";
-import type { CSSProperties } from "react";
-import { motion } from "motion/react";
-import { Archive, Copy, Crosshair, Fingerprint  } from "lucide-react";
+import type { CSSProperties, KeyboardEvent } from "react";
+import { AnimatePresence, motion } from "motion/react";
+import { Archive, CircleStop, Copy, Crosshair, Fingerprint } from "lucide-react";
 import * as ipc from "../lib/ipc";
 import type { DuplicateGroup } from "../lib/ipc";
 import { humanSize } from "../lib/format";
 import { RollNumber } from "../components/RollNumber";
 import { cascade, pageVariants, springSnappy } from "../lib/motion";
 import { useStore } from "../store";
+import { useArmKey } from "./useArmEsc";
 
-/** 重复文件页：内核 XXH3 三级哈希管道（大小 → 头部预哈希 → 全量哈希），只报告不动手。 */
+/** 重复文件页：内核 XXH3 三级哈希管道（大小 → 头部预哈希 → 全量哈希），只报告不动手。
+ *  v5：busy-cancel 取消通道、每组可指定保留份（keep radio）、组 exit 动画、Enter 提交。 */
 
 const msgOf = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
 export function Duplicates() {
     const toast = useStore((s) => s.toast);
+    const setBusyRunning = useStore((s) => s.setBusyRunning);
+    const cancelBusy = useStore((s) => s.cancelBusy);
     const desktop = ipc.isDesktop();
 
     const [path, setPath] = useState("");
@@ -24,21 +28,30 @@ export function Duplicates() {
     const [ranMinMb, setRanMinMb] = useState(10);
     const [hunting, setHunting] = useState(false);
     const [cleaningKey, setCleaningKey] = useState<string | null>(null);
-    const [confirmKey, setConfirmKey] = useState<string | null>(null);
+    // 每组保留份：key=hash，默认第 0 份（列表序，内核稳定排序）
+    const [keepMap, setKeepMap] = useState<Record<string, number>>({});
+    // 组清理两段式（armed 期间 Esc 解除）
+    const { armKey: confirmKey, armKeyFor: armGroup, disarmArm: disarmGroup } = useArmKey(4000);
 
-    /** 清理本组冗余份数：保留第 1 份（建议保留），其余进暂存区（台账可还原） */
+    /** 清理本组冗余份数：保留所选份，其余进暂存区（台账可还原） */
     async function cleanGroup(gi: number) {
         const g = groups?.[gi];
         if (!g || cleaningKey) return;
-        const redundant = g.files.slice(1);
+        const keepIdx = keepMap[g.hash] ?? 0;
+        const redundant = g.files.filter((_, fi) => fi !== keepIdx);
         if (redundant.length === 0) return;
-        setCleaningKey(g.hash + "-" + gi);
+        const key = g.hash + "-" + gi;
+        disarmGroup();
+        setCleaningKey(key);
         try {
             await useStore.getState().manualDelete(redundant);
-            setGroups((list) => (list ? list.filter((_, i) => i !== gi) : list));
+            setGroups((list) => (list ? list.filter((x) => x.hash !== g.hash) : list));
+            setKeepMap((m) => {
+                const { [g.hash]: _drop, ...rest } = m;
+                return rest;
+            });
         } finally {
             setCleaningKey(null);
-            setConfirmKey(null);
         }
     }
 
@@ -52,15 +65,25 @@ export function Duplicates() {
         if (hunting) return;
         const mb = Math.max(1, Math.floor(Number(minMb) || 0));
         setHunting(true);
+        setBusyRunning(true);
         try {
             const g = await ipc.findDupes(path.trim(), mb);
             setRanMinMb(mb);
             setGroups(g);
         } catch (e) {
-            toast("err", `猎取失败：${msgOf(e)}`);
+            if (ipc.errCode(e) === "cancelled") {
+                toast("info", "已取消比对");
+            } else {
+                toast("err", `猎取失败：${msgOf(e)}`);
+            }
         } finally {
             setHunting(false);
+            setBusyRunning(false);
         }
+    }
+
+    function onFormKey(e: KeyboardEvent) {
+        if (e.key === "Enter") void hunt();
     }
 
     async function locate(p: string) {
@@ -86,11 +109,12 @@ export function Duplicates() {
                 <label className="min-w-0 flex-1 basis-64">
                     <span className="text-sm">扫描路径</span>
                     <span className="mt-0.5 block text-[11px]" style={{ color: "var(--zc-text-3)" }}>
-                        在该目录范围内做内容级比对
+                        在该目录范围内做内容级比对 · Enter 直接开跑
                     </span>
                     <input
                         value={path}
                         onChange={(e) => setPath(e.target.value)}
+                        onKeyDown={onFormKey}
                         placeholder={String.raw`D:\Photos`}
                         spellCheck={false}
                         className="num mt-2 w-full rounded-lg border px-3 py-2 text-sm outline-none transition-colors focus:border-[var(--zc-accent-b)]"
@@ -107,6 +131,7 @@ export function Duplicates() {
                         min={1}
                         value={minMb}
                         onChange={(e) => setMinMb(e.target.value)}
+                        onKeyDown={onFormKey}
                         className="num mt-2 w-24 rounded-lg border px-2.5 py-2 text-sm outline-none transition-colors focus:border-[var(--zc-accent-b)]"
                         style={{ background: "var(--zc-surface-2)", borderColor: "var(--zc-border-strong)", color: "var(--zc-text-1)" }}
                     />
@@ -115,10 +140,21 @@ export function Duplicates() {
                     onClick={() => void hunt()}
                     disabled={hunting}
                     className="zc-sheen flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-transform active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
-                    style={{ background: "var(--zc-grad-brand)", color: "#ffffff", boxShadow: "0 8px 22px -8px color-mix(in srgb, var(--zc-accent-a) 60%, transparent), inset 0 1px 0 rgb(255 255 255 / .3)" }}
+                    style={{ background: "var(--zc-grad-brand)", color: "#ffffff", boxShadow: "var(--zc-glow-brand)" }}
                 >
                     <Fingerprint size={14} /> {hunting ? "猎取中…" : "猎取重复"}
                 </button>
+                {hunting && (
+                    <button
+                        data-testid="busy-cancel"
+                        onClick={() => void cancelBusy()}
+                        className="zc-press flex items-center gap-1.5 rounded-lg border px-3.5 py-2 text-sm transition-colors hover:opacity-75"
+                        style={{ borderColor: "var(--zc-danger)", color: "var(--zc-danger-text)" }}
+                        title="终止本次比对（后端 cancel_busy）"
+                    >
+                        <CircleStop size={14} /> 取消
+                    </button>
+                )}
             </div>
 
             {/* ── 运行态：骨架 + 管道提示 ── */}
@@ -188,95 +224,113 @@ export function Duplicates() {
                         </motion.div>
 
                         {/* 组卡片级联 */}
-                        <div className="mt-3 flex flex-col gap-2.5">
-                            {groups.map((g, gi) => (
-                                <motion.section
-                                    key={`${g.hash}-${gi}`}
-                                    variants={cascade(gi)}
-                                    initial="initial"
-                                    animate="animate"
-                                    className="rounded-xl border p-4"
-                                    style={{ background: "var(--zc-surface-1)", borderColor: "var(--zc-border)" }}
-                                >
-                                    <div className="flex flex-wrap items-center gap-2 text-sm">
-                                        <Copy size={14} style={{ color: "var(--zc-accent-b)" }} />
-                                        <span className="num font-medium">
-                                            {g.files.length} 份 × {humanSize(g.size)}
-                                        </span>
-                                        <span className="text-xs" style={{ color: "var(--zc-text-3)" }}>
-                                            · 建议保留最新
-                                        </span>
-                                        <span
-                                            className="num text-[11px]"
-                                            style={{ color: "var(--zc-text-3)" }}
-                                            title="去掉冗余份数后本组可回收"
+                        <motion.div layout className="mt-3 flex flex-col gap-2.5">
+                            <AnimatePresence initial={false}>
+                                {groups.map((g, gi) => {
+                                    const keepIdx = keepMap[g.hash] ?? 0;
+                                    const key = g.hash + "-" + gi;
+                                    return (
+                                        <motion.section
+                                            key={g.hash}
+                                            layout
+                                            variants={cascade(gi)}
+                                            initial="initial"
+                                            animate="animate"
+                                            exit={{ opacity: 0, x: 28, transition: { duration: 0.18 } }}
+                                            className="rounded-xl border p-4"
+                                            style={{ background: "var(--zc-surface-1)", borderColor: "var(--zc-border)" }}
                                         >
-                                            −{humanSize(g.size * (g.files.length - 1))}
-                                        </span>
-                                        {desktop && g.files.length > 1 && (
-                                            <button
-                                                onClick={() => {
-                                                    const k = g.hash + "-" + gi;
-                                                    if (confirmKey === k) { void cleanGroup(gi); }
-                                                    else {
-                                                        setConfirmKey(k);
-                                                        setTimeout(() => setConfirmKey((c) => (c === k ? null : c)), 4000);
-                                                    }
-                                                }}
-                                                disabled={cleaningKey === g.hash + "-" + gi}
-                                                className="ml-auto flex shrink-0 items-center gap-1 rounded-lg px-2.5 py-1 text-[11px] font-medium transition-transform active:scale-95 disabled:opacity-50"
-                                                style={{
-                                                    background: confirmKey === g.hash + "-" + gi
-                                                        ? "color-mix(in srgb, var(--zc-danger) 18%, transparent)"
-                                                        : "color-mix(in srgb, var(--zc-accent-b) 14%, transparent)",
-                                                    color: confirmKey === g.hash + "-" + gi ? "var(--zc-danger)" : "var(--zc-accent-b)",
-                                                }}
-                                                title="保留第 1 份，其余移入暂存区（可在历史页还原）"
-                                            >
-                                                <Archive size={12} />
-                                                {cleaningKey === g.hash + "-" + gi
-                                                    ? "搬运中…"
-                                                    : confirmKey === g.hash + "-" + gi
-                                                        ? "再点一次确认"
-                                                        : "清理冗余 " + (g.files.length - 1) + " 份"}
-                                            </button>
-                                        )}
-                                    </div>
-                                    <div className="mt-2 flex flex-col gap-1">
-                                        {g.files.map((f, fi) => (
-                                            <div
-                                                key={f}
-                                                className="flex items-center gap-2 rounded-lg px-2 py-1.5"
-                                                style={{ background: "var(--zc-surface-2)" }}
-                                            >
-                                                <span
-                                                    className="w-[4.5rem] shrink-0 text-[10px] font-medium"
-                                                    style={{ color: fi === 0 ? "var(--zc-ok)" : "transparent" }}
-                                                >
-                                                    {fi === 0 ? "建议保留→" : "·"}
+                                            <div className="flex flex-wrap items-center gap-2 text-sm">
+                                                <Copy size={14} style={{ color: "var(--zc-accent-text)" }} />
+                                                <span className="num font-medium">
+                                                    {g.files.length} 份 × {humanSize(g.size)}
+                                                </span>
+                                                <span className="text-xs" style={{ color: "var(--zc-text-3)" }}>
+                                                    · 默认保留第一份，可点选保留份
                                                 </span>
                                                 <span
-                                                    className="num min-w-0 flex-1 truncate text-xs"
-                                                    style={{ color: "var(--zc-text-1)" }}
-                                                    title={f}
+                                                    className="num text-[11px]"
+                                                    style={{ color: "var(--zc-text-3)" }}
+                                                    title="去掉冗余份数后本组可回收"
                                                 >
-                                                    {f}
+                                                    −{humanSize(g.size * (g.files.length - 1))}
                                                 </span>
-                                                {desktop && (
+                                                {desktop && g.files.length > 1 && (
                                                     <button
-                                                        onClick={() => void locate(f)}
-                                                        className="flex shrink-0 items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs transition-colors hover:opacity-75"
-                                                        style={{ borderColor: "var(--zc-border-strong)", color: "var(--zc-text-2)" }}
+                                                        onClick={() => {
+                                                            if (confirmKey === key) { void cleanGroup(gi); }
+                                                            else { armGroup(key); }
+                                                        }}
+                                                        disabled={cleaningKey === key}
+                                                        className="zc-press ml-auto flex shrink-0 items-center gap-1 rounded-lg px-2.5 py-1 text-[11px] font-medium transition-colors disabled:opacity-50"
+                                                        style={{
+                                                            background: confirmKey === key
+                                                                ? "color-mix(in srgb, var(--zc-danger) 18%, transparent)"
+                                                                : "color-mix(in srgb, var(--zc-accent-b) 14%, transparent)",
+                                                            color: confirmKey === key ? "var(--zc-danger-text)" : "var(--zc-accent-text)",
+                                                        }}
+                                                        title="保留所选份，其余移入暂存区（可在历史页还原）"
                                                     >
-                                                        <Crosshair size={13} /> 定位
+                                                        <Archive size={12} />
+                                                        {cleaningKey === key
+                                                            ? "搬运中…"
+                                                            : confirmKey === key
+                                                                ? "再点一次确认"
+                                                                : "清理冗余 " + (g.files.length - 1) + " 份"}
                                                     </button>
                                                 )}
                                             </div>
-                                        ))}
-                                    </div>
-                                </motion.section>
-                            ))}
-                        </div>
+                                            <div className="mt-2 flex flex-col gap-1">
+                                                {g.files.map((f, fi) => (
+                                                    <label
+                                                        key={f}
+                                                        className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5"
+                                                        style={{
+                                                            background: fi === keepIdx ? "color-mix(in srgb, var(--zc-ok) 8%, var(--zc-surface-2))" : "var(--zc-surface-2)",
+                                                        }}
+                                                    >
+                                                        <input
+                                                            type="radio"
+                                                            name={`keep-${gi}`}
+                                                            value={String(fi)}
+                                                            checked={fi === keepIdx}
+                                                            onChange={() => setKeepMap((m) => ({ ...m, [g.hash]: fi }))}
+                                                            className="shrink-0 accent-[var(--zc-accent-b)]"
+                                                        />
+                                                        <span
+                                                            className="w-[3.5rem] shrink-0 text-[10px] font-medium"
+                                                            style={{ color: fi === keepIdx ? "var(--zc-ok)" : "var(--zc-text-3)" }}
+                                                        >
+                                                            {fi === keepIdx ? "保留" : "将移除"}
+                                                        </span>
+                                                        <span
+                                                            className="num min-w-0 flex-1 truncate text-xs"
+                                                            style={{ color: "var(--zc-text-1)" }}
+                                                            title={f}
+                                                        >
+                                                            {f}
+                                                        </span>
+                                                        {desktop && (
+                                                            <button
+                                                                onClick={(e) => {
+                                                                    e.preventDefault(); // 别连带触发 radio
+                                                                    e.stopPropagation();
+                                                                    void locate(f);
+                                                                }}
+                                                                className="zc-press flex shrink-0 items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs transition-colors hover:opacity-75"
+                                                                style={{ borderColor: "var(--zc-border-strong)", color: "var(--zc-text-2)" }}
+                                                            >
+                                                                <Crosshair size={13} /> 定位
+                                                            </button>
+                                                        )}
+                                                    </label>
+                                                ))}
+                                            </div>
+                                        </motion.section>
+                                    );
+                                })}
+                            </AnimatePresence>
+                        </motion.div>
                     </>
                 )
             )}

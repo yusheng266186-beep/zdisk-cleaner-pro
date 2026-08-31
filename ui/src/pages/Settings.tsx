@@ -36,8 +36,9 @@ export function Settings() {
             </Section>
 
             <Section title="策略（默认值即安全值）">
-                <Row title="默认仅勾选安全档" sub="注意及以上档位需逐条展开二次确认（UI 强制）" locked />
-                <Row title="vault 暂存期 7 天" sub="到期物理清除前会再次提示；期间随时一键全量还原" locked />
+                <Row title="默认仅勾选安全档" sub="注意及以上档位默认禁用勾选，展开明细确认后才可勾选（UI 强制）" locked />
+                <Row title="危险操作确认" sub="清理执行、彻底删除、清空回收站、安全删除、DISM 等均为两段式：点一次进入确认态，4 秒内再点一次才生效" locked />
+                <Row title="vault 暂存期 7 天" sub="超期批次在应用启动时自动清扫物理删除；期内随时可在历史页「还原」或「彻底删除」" locked />
                 <Row title="执行端 fail-closed 守卫" sub="任何路径解析失败都拒绝整批操作——宁可少删，不可误删" locked />
             </Section>
 

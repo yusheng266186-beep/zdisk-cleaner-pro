@@ -1,9 +1,22 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-theme="dark">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>ZDiskCleaner Pro</title>
+    <script>
+      // 主题 bootstrap（AUDIT §3E：light 用户冷启动首帧闪深空）：
+      // CSS/JS bundle 加载前先按 localStorage 落 data-theme，首帧即正确主题。
+      // 键名与 store.ts 的 "zc-theme" 严格一致；任何异常回落 dark。
+      (function () {
+        try {
+          var t = localStorage.getItem("zc-theme");
+          document.documentElement.dataset.theme = t === "light" ? "light" : "dark";
+        } catch (e) {
+          document.documentElement.dataset.theme = "dark";
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

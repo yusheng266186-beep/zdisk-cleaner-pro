@@ -1,6 +1,6 @@
 # ADR-001 · v3 技术栈：Tauri 2 + Rust 内核 + React 前端
 
-状态：已接受 · 2026-08-27
+状态：已接受 · 2026-08-27 · **Amended 2026-08-31（v5 审计）**：表中"MFT 直读（ntfs-reader feature flag）"从未实现且被 ADR-003 正式推迟；"本机 GNU 工具链"环境备注已被 MSVC 统一取代（scripts/msvc-*.cmd、CI 同步）。
 
 ## 背景
 

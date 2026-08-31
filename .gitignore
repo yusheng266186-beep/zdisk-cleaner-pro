@@ -21,3 +21,7 @@ Thumbs.db
 # 更新签名私钥（绝不入库）
 .tauri/
 *.tsbuildinfo
+latest.json
+
+# 本机 target-dir 重定向(D 盘专属路径,不入库;产物位置以 `cargo metadata` 为准)
+.cargo/

@@ -7,6 +7,14 @@
 //! 3. 高风险目标一律 Risk::Risky/Expert，默认不会被勾选；
 //! 4. 只声明"可再生"的产物——用户创作内容（聊天记录、存档、工程文件）
 //!    永远不进规则表，属于存储迁移中心的搬迁对象。
+//!
+//! v5 契约（审计 §B、A1）：
+//! - 系统树目标一律 `%WINDIR%` / `%SystemDrive%` / `%PROGRAMDATA%` 派生，
+//!   不再硬编码 C:——非 C 盘系统安装的机器整库不再失灵；
+//! - 每条 admin 规则的每个字面根必须被 `zc_core::guard::elevated_allowlist`
+//!   的某前缀覆盖（结构测试强制），提权批由此可清且 Windows 树其余部分
+//!   依旧 fail-closed（A1 死锁解除）；
+//! - `min_age_days`（temp/wer 7 天）：引擎按 mtime 过滤，"只删 7 天前的"。
 
 use serde::Serialize;
 use zc_core::{Domain, Risk};
@@ -24,11 +32,18 @@ pub struct Rule {
     /// 守卫模式：即便 targets 命中也不许删
     #[serde(default)]
     pub guards: &'static [&'static str],
+    /// 最小年龄（天）：mtime 不足阈值的命中由扫描引擎剔除；
+    /// None = 不限年龄
+    #[serde(default)]
+    pub min_age_days: Option<u64>,
 }
 
 macro_rules! rule {
     ($id:expr, $name:expr, $domain:expr, $risk:expr, $admin:expr,
-     targets = [$($t:expr),+ $(,)?] $(, guards = [$($g:expr),* $(,)?])? $(,)?) => {
+     targets = [$($t:expr),+ $(,)?]
+     $(, guards = [$($g:expr),* $(,)?])?
+     $(, min_age = $ma:expr)?
+     $(,)?) => {
         Rule {
             id: $id,
             name_zh: $name,
@@ -37,6 +52,13 @@ macro_rules! rule {
             admin_required: $admin,
             targets: &[$($t),+],
             guards: &[$($($g),*)?],
+            // 未写 min_age 子句 → None；写了 → Some(N)
+            min_age_days: {
+                #[allow(unused_mut, unused_assignments)]
+                let mut a: Option<u64> = None;
+                $(a = Some($ma);)?
+                a
+            },
         }
     };
 }
@@ -44,12 +66,16 @@ macro_rules! rule {
 pub const RULES: &[Rule] = &[
     // ════════════════════════ System ════════════════════════
     rule!("sys-user-temp", "用户临时文件", Domain::System, Risk::Safe, false,
-        targets = ["%LOCALAPPDATA%/Temp/**"],
-        guards = ["%LOCALAPPDATA%/Temp/ZDiskCleanerPro3/**"]),
-    rule!("sys-system-temp", "系统临时文件 (C:/Windows/Temp)", Domain::System, Risk::Caution, true,
-        targets = ["C:/Windows/Temp/**"]),
+        targets = ["%TEMP%/**", "%LOCALAPPDATA%/Temp/**"],
+        guards = ["%LOCALAPPDATA%/Temp/ZDiskCleanerPro3/**"],
+        min_age = 7),
+    rule!("sys-system-temp", "系统临时文件 (Windows\\Temp)", Domain::System, Risk::Caution, true,
+        targets = ["%WINDIR%/Temp/**"],
+        min_age = 7),
     rule!("sys-update-cache", "Windows 更新下载缓存", Domain::System, Risk::Caution, true,
-        targets = ["C:/Windows/SoftwareDistribution/Download/**"]),
+        targets = ["%WINDIR%/SoftwareDistribution/Download/**"]),
+    rule!("sys-update-reporting", "Windows 更新汇报日志", Domain::System, Risk::Caution, true,
+        targets = ["%WINDIR%/SoftwareDistribution/ReportingEvents.log"]),
     rule!("sys-thumbnails", "缩略图缓存", Domain::System, Risk::Safe, false,
         targets = [
             "%LOCALAPPDATA%/Microsoft/Windows/Explorer/thumbcache_*.db",
@@ -63,19 +89,27 @@ pub const RULES: &[Rule] = &[
         targets = [
             "%LOCALAPPDATA%/Microsoft/Windows/WER/ReportArchive/**",
             "%LOCALAPPDATA%/Microsoft/Windows/WER/ReportQueue/**",
-        ]),
+        ],
+        min_age = 7),
+    rule!("sys-wer-system", "Windows 错误报告队列 (系统)", Domain::System, Risk::Caution, true,
+        targets = ["%PROGRAMDATA%/Microsoft/Windows/WER/**"],
+        min_age = 7),
+    rule!("sys-win-logs-diag", "Windows 诊断日志 (Logs\\Diagnostics)", Domain::System, Risk::Safe, true,
+        targets = ["%WINDIR%/Logs/Diagnostics/*.etl"]),
     rule!("sys-font-cache", "系统字体缓存", Domain::System, Risk::Caution, true,
-        targets = ["C:/Windows/ServiceProfiles/LocalService/AppData/Local/FontCache/*.dat"]),
+        targets = ["%WINDIR%/ServiceProfiles/LocalService/AppData/Local/FontCache/*.dat"]),
     rule!("sys-delivery-opt", "传递优化缓存", Domain::System, Risk::Caution, true,
-        targets = ["C:/Windows/ServiceProfiles/NetworkService/AppData/Local/Microsoft/Windows/DeliveryOptimization/**"]),
-    rule!("sys-kernel-dumps", "内核转储 / 蓝屏 Minidump", Domain::System, Risk::Caution, true,
-        targets = ["C:/Windows/MEMORY.DMP", "C:/Windows/Minidump/*.dmp"]),
+        targets = ["%PROGRAMDATA%/Microsoft/DeliveryOptimization/**"]),
+    rule!("sys-kernel-dumps", "内核转储 / 蓝屏 Minidump", Domain::System, Risk::Risky, true,
+        targets = ["%WINDIR%/MEMORY.DMP", "%WINDIR%/Minidump/*.dmp"]),
     rule!("sys-prefetch", "Windows Prefetch", Domain::System, Risk::Caution, true,
-        targets = ["C:/Windows/Prefetch/*.pf"]),
+        targets = ["%WINDIR%/Prefetch/*.pf"]),
     rule!("sys-wu-logs", "Windows 更新日志", Domain::System, Risk::Safe, true,
-        targets = ["C:/Windows/Logs/WindowsUpdate/**"]),
+        targets = ["%WINDIR%/Logs/WindowsUpdate/**"]),
     rule!("sys-perflogs", "性能日志 (PerfLogs)", Domain::System, Risk::Caution, true,
-        targets = ["C:/PerfLogs/System/Diagnostics/**"]),
+        targets = ["%SystemDrive%/PerfLogs/System/Diagnostics/**"]),
+    rule!("sys-winre-agent", "WinRE 暂存目录 ($WinREAgent)", Domain::System, Risk::Risky, true,
+        targets = ["%SystemDrive%/$WinREAgent/**"]),
 
     // ════════════════════════ Browser ═══════════════════════
     rule!("chrome-cache", "Chrome 缓存", Domain::Browser, Risk::Safe, false,
@@ -83,6 +117,12 @@ pub const RULES: &[Rule] = &[
             "%LOCALAPPDATA%/Google/Chrome/User Data/*/Cache/**",
             "%LOCALAPPDATA%/Google/Chrome/User Data/*/Code Cache/**",
             "%LOCALAPPDATA%/Google/Chrome/User Data/*/GPUCache/**",
+            "%LOCALAPPDATA%/Google/Chrome Beta/User Data/*/Cache/**",
+            "%LOCALAPPDATA%/Google/Chrome Beta/User Data/*/Code Cache/**",
+            "%LOCALAPPDATA%/Google/Chrome Beta/User Data/*/GPUCache/**",
+            "%LOCALAPPDATA%/Google/Chrome Dev/User Data/*/Cache/**",
+            "%LOCALAPPDATA%/Google/Chrome Dev/User Data/*/Code Cache/**",
+            "%LOCALAPPDATA%/Google/Chrome Dev/User Data/*/GPUCache/**",
         ],
         guards = ["**/Local State"]),
     rule!("chrome-crashpad", "Chrome 崩溃报告", Domain::Browser, Risk::Safe, false,
@@ -97,7 +137,11 @@ pub const RULES: &[Rule] = &[
     rule!("edge-crashpad", "Edge 崩溃报告", Domain::Browser, Risk::Safe, false,
         targets = ["%LOCALAPPDATA%/Microsoft/Edge/User Data/Crashpad/completed/**"]),
     rule!("brave-cache", "Brave 缓存", Domain::Browser, Risk::Safe, false,
-        targets = ["%LOCALAPPDATA%/BraveSoftware/Brave-Browser/User Data/*/Cache/**"],
+        targets = [
+            "%LOCALAPPDATA%/BraveSoftware/Brave-Browser/User Data/*/Cache/**",
+            "%LOCALAPPDATA%/BraveSoftware/Brave-Browser/User Data/*/Code Cache/**",
+            "%LOCALAPPDATA%/BraveSoftware/Brave-Browser/User Data/*/GPUCache/**",
+        ],
         guards = ["**/Local State"]),
     rule!("brave-crashpad", "Brave 崩溃报告", Domain::Browser, Risk::Safe, false,
         targets = ["%LOCALAPPDATA%/BraveSoftware/Brave-Browser/User Data/Crashpad/completed/**"]),
@@ -105,16 +149,38 @@ pub const RULES: &[Rule] = &[
         targets = ["%LOCALAPPDATA%/Mozilla/Firefox/Profiles/*/cache2/**"]),
     rule!("ff-startup-cache", "Firefox 启动缓存", Domain::Browser, Risk::Safe, false,
         targets = ["%LOCALAPPDATA%/Mozilla/Firefox/Profiles/*/startupCache/**"]),
+    rule!("ff-crash-reports", "Firefox 崩溃报告", Domain::Browser, Risk::Safe, false,
+        targets = [
+            "%LOCALAPPDATA%/Mozilla/Firefox/Crash Reports/**",
+            "%LOCALAPPDATA%/Crash Reports/**",
+        ]),
     rule!("opera-cache", "Opera 缓存", Domain::Browser, Risk::Safe, false,
-        targets = ["%LOCALAPPDATA%/Opera Software/Opera Stable/Cache/**"]),
+        targets = [
+            "%LOCALAPPDATA%/Opera Software/Opera Stable/Cache/**",
+            "%LOCALAPPDATA%/Opera Software/Opera Stable/Code Cache/**",
+            "%LOCALAPPDATA%/Opera Software/Opera Stable/GPUCache/**",
+        ]),
     rule!("opera-gx-cache", "Opera GX 缓存", Domain::Browser, Risk::Safe, false,
-        targets = ["%LOCALAPPDATA%/Opera Software/Opera GX Stable/Cache/**"]),
+        targets = [
+            "%LOCALAPPDATA%/Opera Software/Opera GX Stable/Cache/**",
+            "%LOCALAPPDATA%/Opera Software/Opera GX Stable/Code Cache/**",
+            "%LOCALAPPDATA%/Opera Software/Opera GX Stable/GPUCache/**",
+        ]),
     rule!("vivaldi-cache", "Vivaldi 缓存", Domain::Browser, Risk::Safe, false,
-        targets = ["%LOCALAPPDATA%/Vivaldi/User Data/Default/Cache/**"]),
+        targets = ["%LOCALAPPDATA%/Vivaldi/User Data/*/Cache/**"]),
+    rule!("web-inet-cache", "IE/Edge 遗留 INetCache", Domain::Browser, Risk::Safe, false,
+        targets = ["%LOCALAPPDATA%/Microsoft/Windows/INetCache/**"]),
 
     // ════════════════════════ Dev ═══════════════════════════
     rule!("dev-npm-cache", "npm 下载缓存", Domain::Dev, Risk::Safe, false,
         targets = ["%LOCALAPPDATA%/npm-cache/_cacache/**"]),
+    rule!("dev-npm-cache-legacy", "npm 旧版遗留缓存 (_legacy-*)", Domain::Dev, Risk::Safe, false,
+        targets = [
+            "%LOCALAPPDATA%/npm-cache/_legacy-cache/**",
+            "%LOCALAPPDATA%/npm-cache/_legacy-data/**",
+            "%USERPROFILE%/.npm/_legacy-cache/**",
+            "%USERPROFILE%/.npm/_legacy-data/**",
+        ]),
     rule!("dev-pip-cache", "pip 下载缓存", Domain::Dev, Risk::Safe, false,
         targets = ["%LOCALAPPDATA%/pip/cache/**"]),
     rule!("dev-yarn-berry", "Yarn Berry 全局镜像缓存", Domain::Dev, Risk::Safe, false,
@@ -123,6 +189,12 @@ pub const RULES: &[Rule] = &[
         targets = ["%LOCALAPPDATA%/Yarn/cache/**"]),
     rule!("dev-pnpm-metadata", "pnpm 状态缓存", Domain::Dev, Risk::Safe, false,
         targets = ["%LOCALAPPDATA%/pnpm-state/**"]),
+    rule!("dev-pnpm-store", "pnpm 内容寻址存储", Domain::Dev, Risk::Caution, false,
+        targets = [
+            "%LOCALAPPDATA%/pnpm/store/**",
+            "%USERPROFILE%/pnpm-store/**",
+            "%USERPROFILE%/.pnpm-store/**",
+        ]),
     rule!("dev-uv-cache", "uv 下载缓存", Domain::Dev, Risk::Safe, false,
         targets = ["%LOCALAPPDATA%/uv/cache/**"]),
     rule!("dev-poetry-cache", "Poetry 下载缓存", Domain::Dev, Risk::Safe, false,
@@ -146,10 +218,17 @@ pub const RULES: &[Rule] = &[
         targets = ["%LOCALAPPDATA%/node-gyp/Cache/**"]),
     rule!("dev-electron-builder", "electron-builder 打包缓存", Domain::Dev, Risk::Safe, false,
         targets = ["%LOCALAPPDATA%/electron-builder/Cache/**"]),
-    rule!("dev-playwright", "Playwright 浏览器二进制", Domain::Dev, Risk::Safe, false,
+    rule!("dev-playwright", "Playwright 浏览器二进制", Domain::Dev, Risk::Caution, false,
         targets = ["%LOCALAPPDATA%/ms-playwright/**"]),
     rule!("dev-vscode-cacheddata", "VS Code CachedData", Domain::Dev, Risk::Safe, false,
         targets = ["%APPDATA%/Code/CachedData/**", "%APPDATA%/Code - Insiders/CachedData/**"]),
+    rule!("dev-vscode-cache", "VS Code 运行缓存与日志", Domain::Dev, Risk::Safe, false,
+        targets = [
+            "%APPDATA%/Code/Cache/**",
+            "%APPDATA%/Code/Code Cache/**",
+            "%APPDATA%/Service Worker/CacheStorage/**",
+            "%APPDATA%/Code/logs/**",
+        ]),
     rule!("dev-vscode-vsix", "VS Code 扩展安装包缓存", Domain::Dev, Risk::Safe, false,
         targets = [
             "%USERPROFILE%/.vscode/CachedExtensionVSIXs/**",
@@ -201,6 +280,11 @@ pub const RULES: &[Rule] = &[
         targets = ["%LOCALAPPDATA%/Steam/depotcache/**"]),
     rule!("app-qq-crashpad", "QQ 崩溃报告", Domain::Apps, Risk::Safe, false,
         targets = ["%APPDATA%/Tencent/QQ/CrashPad/completed/**"]),
+    rule!("app-java-deploy", "Java Deployment 缓存", Domain::Apps, Risk::Safe, false,
+        targets = [
+            "%LOCALAPPDATA%/Sun/Java/Deployment/cache/**",
+            "%APPDATA%/Sun/Java/Deployment/cache/**",
+        ]),
     rule!("app-amd-shader", "AMD 着色器缓存", Domain::Apps, Risk::Safe, false,
         targets = [
             "%LOCALAPPDATA%/AMD/DxCache/**",
@@ -217,14 +301,21 @@ pub const RULES: &[Rule] = &[
     rule!("log-jetbrains-local", "JetBrains 本地日志", Domain::Logs, Risk::Safe, false,
         targets = ["%LOCALAPPDATA%/JetBrains/*/log/**"]),
     rule!("log-cbs", "组件维护日志 (CBS)", Domain::Logs, Risk::Expert, true,
-        targets = ["C:/Windows/Logs/CBS/*.log"],
-        guards = ["C:/Windows/Logs/CBS/CBS.log"]),
+        targets = ["%WINDIR%/Logs/CBS/*.log"],
+        guards = ["%WINDIR%/Logs/CBS/CBS.log"]),
 ];
 
 /// （rule_id, pattern 归一化串）对，供引擎单遍匹配。
 /// 展开失败的环境变量条目跳过（对应环境未安装该软件是正常态）。
 pub fn expand_all() -> Vec<(String, String)> {
+    expand_all_with_opts().0
+}
+
+/// 同 [`expand_all`]，并附「rule_id → 最小年龄（天）」表，
+/// 供 `zc_core::scanner::scan_with_opts` 消费 min_age_days（v5）。
+pub fn expand_all_with_opts() -> (Vec<(String, String)>, std::collections::BTreeMap<String, u64>) {
     let mut out = Vec::new();
+    let mut ages = std::collections::BTreeMap::new();
     for r in RULES {
         for t in r.targets {
             let (p, ok) = zc_core::expand_env(t);
@@ -237,8 +328,11 @@ pub fn expand_all() -> Vec<(String, String)> {
             }
             out.push((r.id.to_string(), n));
         }
+        if let Some(d) = r.min_age_days {
+            ages.insert(r.id.to_string(), d);
+        }
     }
-    out
+    (out, ages)
 }
 
 pub fn find(id: &str) -> Option<&'static Rule> {
@@ -294,8 +388,8 @@ mod tests {
     }
 
     #[test]
-    fn registry_meets_v3_floor() {
-        assert!(RULES.len() >= 60, "Phase 3 验收下限 60 条，当前 {}", RULES.len());
+    fn registry_meets_v5_floor() {
+        assert!(RULES.len() >= 65, "v5 验收下限 65 条，当前 {}", RULES.len());
         // 五大域每域至少 2 条
         for d in [Domain::System, Domain::Browser, Domain::Dev, Domain::Apps, Domain::Logs] {
             assert!(
@@ -303,14 +397,84 @@ mod tests {
                 "{d:?} 域覆盖不足"
             );
         }
+        // v5 新增规则必须全部在册
+        for id in [
+            "sys-wer-system", "sys-win-logs-diag", "sys-winre-agent", "sys-update-reporting",
+            "web-inet-cache", "app-java-deploy", "dev-pnpm-store", "dev-npm-cache-legacy",
+            "dev-vscode-cache", "ff-crash-reports",
+        ] {
+            assert!(find(id).is_some(), "v5 新规则缺失: {id}");
+        }
+    }
+
+    #[test]
+    fn risk_recalibrations_v5() {
+        assert_eq!(find("dev-playwright").unwrap().risk, Risk::Caution, "Playwright 删后离线不可恢复");
+        assert_eq!(find("sys-kernel-dumps").unwrap().risk, Risk::Risky, "内核转储是事故证据");
+    }
+
+    #[test]
+    fn min_age_set_on_temp_and_wer_rules() {
+        for id in ["sys-user-temp", "sys-system-temp", "sys-wer-queue", "sys-wer-system"] {
+            assert_eq!(find(id).unwrap().min_age_days, Some(7), "{id} 必须 7 天年龄闸");
+        }
+    }
+
+    #[test]
+    fn no_hardcoded_windows_drive_literals() {
+        // v5 书写纪律：系统树路径一律 env 派生（%WINDIR%/%SystemDrive%/%PROGRAMDATA%）
+        for r in RULES {
+            for t in r.targets {
+                let lower = t.to_lowercase();
+                assert!(
+                    !lower.starts_with("c:/windows") && !lower.starts_with("c:/programdata")
+                        && !lower.starts_with("c:/perflogs"),
+                    "规则 {} 仍硬编码 C: 系统根: {t}",
+                    r.id
+                );
+            }
+        }
     }
 
     #[test]
     fn admin_rules_marked_consistently() {
-        // 目标位于系统树（C:/Windows*、C:/PerfLogs*）的规则必须显式标记 admin_required
+        // 目标位于系统树（%WINDIR%/%SystemDrive%/%PROGRAMDATA%/C: 遗留字面）的
+        // 规则必须显式标记 admin_required，且反之亦然
         for r in RULES {
-            let needs_admin = r.targets.iter().any(|t| t.starts_with("C:/Windows") || t.starts_with("C:/PerfLogs"));
+            let needs_admin = r.targets.iter().any(|t| {
+                t.starts_with("%WINDIR%")
+                    || t.starts_with("%SystemDrive%")
+                    || t.starts_with("%PROGRAMDATA%")
+                    || t.starts_with("C:/Windows")
+                    || t.starts_with("C:/PerfLogs")
+            });
             assert_eq!(needs_admin, r.admin_required, "admin 标记与目标不一致: {}", r.id);
+        }
+    }
+
+    /// A1 死锁解除的结构闸：每条 admin 规则的每个字面根必须被
+    /// elevated allowlist 的某前缀**精确覆盖**（根 ⊆ 白名单前缀）。
+    /// 白名单本身由进程 env 派生——CI/本机 SystemDrive 非 C 也自洽。
+    #[test]
+    fn every_admin_rule_root_is_elevated_allowlisted() {
+        let allow = zc_core::guard::elevated_allowlist();
+        assert!(!allow.is_empty(), "elevated_allowlist 不得为空");
+        for r in RULES.iter().filter(|r| r.admin_required) {
+            for t in r.targets {
+                let (p, ok) = zc_core::expand_env(t);
+                assert!(ok, "admin 规则 {} 的目标 env 展开失败: {t}", r.id);
+                let n = zc_core::norm(&p);
+                let root = zc_core::literal_root(&n);
+                assert!(!root.is_empty(), "admin 规则 {} 根为空: {t}", r.id);
+                let covered = allow
+                    .iter()
+                    .any(|a| root == *a || root.starts_with(&format!("{a}/")));
+                assert!(
+                    covered,
+                    "admin 规则 {} 的字面根 [{root}] 不在 elevated allowlist 内，提权批必被守卫连坐",
+                    r.id
+                );
+            }
         }
     }
 

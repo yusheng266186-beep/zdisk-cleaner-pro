@@ -91,24 +91,22 @@ fn undo_entries_return_order_is_stable() {
         .collect();
 
     // 同一实例多次调用 + 独立重开库，返回序都必须等于台账插入序
+    // （v5：undo_entries 返回 Result——吞错即 GC 灾难链，测试同步传播）
     let s1 = LedgerStore::open().unwrap();
-    assert_eq!(s1.undo_entries("order-1"), expect);
-    assert_eq!(s1.undo_entries("order-1"), expect);
-    assert_eq!(LedgerStore::open().unwrap().undo_entries("order-1"), expect);
+    assert_eq!(s1.undo_entries("order-1").unwrap(), expect);
+    assert_eq!(s1.undo_entries("order-1").unwrap(), expect);
+    assert_eq!(LedgerStore::open().unwrap().undo_entries("order-1").unwrap(), expect);
 
-    // 重存同 id（覆盖式）后顺序仍跟随最新写入序
+    // v5 S3 防线：同 id 且条目非空的覆盖式重存必须被显式拒绝，
+    // 且原台账分毫不动（此前 INSERT OR REPLACE 会瞬间抹掉整批账）。
     let mut reordered = sample_manifest("order-1", CleanMode::Vault);
     reordered.entries.reverse();
-    s1.save_manifest(&reordered).unwrap();
-    let expect2: Vec<(String, String)> = reordered
-        .entries
-        .iter()
-        .map(|e| (e.origin.clone(), e.vault_rel.clone()))
-        .collect();
+    let err = s1.save_manifest(&reordered).unwrap_err();
+    assert_eq!(err.kind(), std::io::ErrorKind::AlreadyExists, "{err}");
     assert_eq!(
-        LedgerStore::open().unwrap().undo_entries("order-1"),
-        expect2,
-        "覆盖保存后应得到新序"
+        LedgerStore::open().unwrap().undo_entries("order-1").unwrap(),
+        expect,
+        "拒绝覆盖后原序必须原封不动"
     );
 }
 
@@ -119,6 +117,10 @@ fn sample_history(session_id: &str, mode: CleanMode) -> HistoryRecord {
         mode,
         files: 42,
         bytes_moved: 987_654_321,
+        // v5 扩展列：kind/src/dst 参与 roundtrip（serde default 向后兼容）
+        kind: Some("clean".into()),
+        src: None,
+        dst: None,
     }
 }
 
