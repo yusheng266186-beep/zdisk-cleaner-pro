@@ -93,10 +93,18 @@ pub fn apply(report: &ScanReport, rule_ids: &[String], mode: CleanMode) -> Resul
         }
     };
 
-    for (origin, _) in &moved {
-        outcome.done_bytes +=
-            hits.iter().find(|h| &h.path == origin).map(|h| h.size).unwrap_or(0);
-    }
+    // 记账口径：vault 用副本实测字节（目录=子树求和）——扫描与清理之间活目录
+    // 会增长，快照记账曾造成 vault 实重 > 台账、撤销/彻底删除对不上账；
+    // 回收站条目搬走后不可靠实测，沿用扫描快照（清空回收站才真正释放）。
+    outcome.done_bytes = moved
+        .iter()
+        .map(|(origin, dst)| match mode {
+            CleanMode::Vault => super::executor::vault::actual_size(dst),
+            CleanMode::RecycleBin => {
+                hits.iter().find(|h| &h.path == origin).map(|h| h.size).unwrap_or(0)
+            }
+        })
+        .sum();
     outcome.done_files = moved.len() as u64;
 
     let entries = moved
@@ -104,7 +112,12 @@ pub fn apply(report: &ScanReport, rule_ids: &[String], mode: CleanMode) -> Resul
         .map(|(o, d)| crate::manifest::ManifestEntry {
             origin: o.display().to_string(),
             vault_rel: d.display().to_string(),
-            size: hits.iter().find(|h| &h.path == o).map(|h| h.size).unwrap_or(0),
+            size: match mode {
+                CleanMode::Vault => super::executor::vault::actual_size(d),
+                CleanMode::RecycleBin => {
+                    hits.iter().find(|h| &h.path == o).map(|h| h.size).unwrap_or(0)
+                }
+            },
         })
         .collect();
     CleanManifest {

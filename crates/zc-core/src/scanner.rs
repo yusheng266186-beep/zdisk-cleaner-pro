@@ -66,6 +66,12 @@ impl ScanHandle {
     pub fn cancelled(&self) -> bool {
         self.0.load(Ordering::SeqCst)
     }
+    /// 扫描开始时清除残留的取消标记。令牌生命周期跟随一次扫描——
+    /// 否则取消过一次后，同一进程内的所有后续扫描都会立即自取消
+    /// （前端表现为「扫描失败」，本会话再也无法体检）。
+    pub fn reset(&self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
 }
 
 pub fn now_unix() -> u64 {
@@ -93,6 +99,7 @@ pub fn scan(
     handle: &ScanHandle,
     mut on_event: impl FnMut(ScanEvent),
 ) -> Result<ScanReport> {
+    handle.reset(); // 上一次扫描的取消标记不得泄漏到这一次
     let matcher = RuleMatcher::build(pairs)?;
     // 根去重：不同规则的多个模式可能共享同一字面根
     let roots: BTreeMap<String, ()> = pairs

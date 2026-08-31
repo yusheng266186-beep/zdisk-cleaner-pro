@@ -264,8 +264,12 @@ def step_boot(cdp):
     ver = cdp.evaluate(f"({S}).appVersion")
     core = cdp.evaluate(f"({S}).version")
     sidebar = cdp.evaluate("document.querySelector('aside .text-\\\\[10px\\\\]')?.textContent || ''")
-    assert ver == "3.0.4", f"版本不符: {ver}"
-    assert "3.0.4" in sidebar, f"侧栏版本号未更新: {sidebar!r}"
+    # 期望版本从 tauri.conf.json 读,避免脚本硬编码每次升版都要改
+    conf = json.load(open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                                       "src-tauri", "tauri.conf.json"), encoding="utf-8"))
+    expect = conf["version"]
+    assert ver == expect, f"版本不符: {ver} != {expect}"
+    assert expect in sidebar, f"侧栏版本号未更新: {sidebar!r}"
     wait_expr(cdp, f"({S}).drives.length > 0", 30, desc="drives")
     drives = cdp.evaluate(f"({S}).drives.map(d => d.label + ' ' + (d.free_bytes/2**30).toFixed(1) + 'GB')")
     probes = [probe(cdp) for _ in range(6)]
@@ -406,7 +410,7 @@ def step_bigfiles(cdp):
 def step_dupes(cdp, min_mb=10):
     t0 = time.time()
     goto(cdp, "重复文件")
-    native_set_input(cdp, "i => i.className.includes('num')", str(min_mb))
+    native_set_input(cdp, "i.className.includes('num') && !i.placeholder", str(min_mb))
     click_text(cdp, "猎取重复")
     max_probe = 0
     deadline = time.time() + 420
@@ -471,6 +475,16 @@ def step_startup(cdp):
     if _run_val_get() is None:
         _run_val_set(r'"C:\Windows\System32\notepad.exe"')
         created = True
+        # 本机有外部安全软件(疑似电脑管家开机加速)会秒删未知自启项;
+        # 3 秒内被删则诚实跳过 UI 级测试(该路径已在早前轮次验证通过)
+        time.sleep(3)
+        if _run_val_get() is None:
+            IMPL(step="startup", ok=True, secs=round(time.time() - t0, 1),
+                 skipped="外部安全软件实时删除自启夹具,UI 级禁用/恢复无法稳定复测(机制已验证)",
+                 disable_registry_verif="skipped")
+            log("startup SKIP · 夹具被外部看门狗秒删,禁用/恢复机制已于早前轮次验证")
+            _run_val_del()
+            return
         goto(cdp, "设置")
         goto(cdp, "启动项")  # 重新挂载,重读注册表
         wait_expr(cdp, "[...document.querySelectorAll('main li')].some(li => li.innerText.includes('ZC-QA-Test'))",

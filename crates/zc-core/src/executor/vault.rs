@@ -33,8 +33,36 @@ fn ensure_unique(parent: &Path, file_name: &Path) -> PathBuf {
 /// 单批搬运结果：成功 (原路径, vault 副本路径)；失败 (原路径, 错误说明)。
 pub type StashOutcome = (Vec<(PathBuf, PathBuf)>, Vec<(PathBuf, String)>);
 
+/// 副本实际字节数（目录=整棵子树求和）。记账用实测值而非扫描时快照，
+/// 否则「活目录」（D3DSCache/temp 在扫描→清理窗口内仍会增长）造成
+/// vault 实重 > 台账，撤销/彻底删除的对账永远差一截。
+pub fn actual_size(p: &Path) -> u64 {
+    if p.is_dir() {
+        let mut total = 0;
+        if let Ok(rd) = fs::read_dir(p) {
+            for e in rd.filter_map(|e| e.ok()) {
+                let meta = match e.metadata() {
+                    Ok(m) => m,
+                    Err(_) => continue,
+                };
+                if meta.is_dir() {
+                    total += actual_size(&e.path());
+                } else {
+                    total += meta.len();
+                }
+            }
+        }
+        total
+    } else {
+        fs::metadata(p).map(|m| m.len()).unwrap_or(0)
+    }
+}
+
 /// 把一批文件/目录移入 vault。
-/// 返回 (成功, 失败列表)。目录内部自包含，直接整体搬移。
+/// 返回 (成功, 失败列表)。目录仅做原子 rename：此前的「递归复制+删源」回退
+/// 会在源目录被占用时把数据劈成两半（半删的源 + 不进台账的副本），绝不可用。
+/// 文件允许复制回退（跨盘场景），但删源失败时必须回滚副本——
+/// 不变量：vault 里只允许存在台账内的副本，失败项数据完整留在原位。
 pub fn stash(session_dir: &Path, sources: &[&Path]) -> StashOutcome {
     fs::create_dir_all(session_dir).expect("vault session dir");
     let mut ok = Vec::new();
@@ -49,14 +77,21 @@ pub fn stash(session_dir: &Path, sources: &[&Path]) -> StashOutcome {
         let dst_parent = session_dir.join(format!("{:04}", idx / 512));
         fs::create_dir_all(&dst_parent).expect("vault bucket dir");
         let dst = ensure_unique(&dst_parent, Path::new(&name));
-        match fs::rename(src, &dst).or_else(|_| {
-            // 跨卷 fallback：copy + remove（文件）；目录递归拷贝
-            copy_all(src, &dst)?;
-            fs::remove_dir_all(src)
+        let moved = match fs::rename(src, &dst) {
+            Ok(()) => Ok(()),
+            Err(_) if src.is_dir() => Err(std::io::Error::other(
+                "目录被占用或需跨盘，暂存区只做原子搬移，已原样保留",
+            )),
+            Err(_) => fs::copy(src, &dst)
+                .map(|_| ())
+                .and_then(|()| fs::remove_file(src))
                 .or_else(|e| {
-                    if src.is_file() { fs::remove_file(src).map_err(|_| e)?; Ok(()) } else { Err(e) }
-                })
-        }) {
+                    // 删源失败：回滚副本，数据完整留在原位
+                    let _ = fs::remove_file(&dst);
+                    Err(e)
+                }),
+        };
+        match moved {
             Ok(()) => ok.push((src.to_path_buf(), dst)),
             Err(e) => failed.push((src.to_path_buf(), e.to_string())),
         }
