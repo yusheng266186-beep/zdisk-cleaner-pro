@@ -25,3 +25,6 @@ latest.json
 
 # 本机 target-dir 重定向(D 盘专属路径,不入库;产物位置以 `cargo metadata` 为准)
 .cargo/
+
+# v5 交付物本地暂存区（构建产物副本，不入库）
+dist-v5/
