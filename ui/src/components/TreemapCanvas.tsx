@@ -13,13 +13,24 @@ interface Props {
     onSelectNode?: (node: TreeNode) => void;
 }
 
-const GAP = 1; // 色块缝隙（渲染时两侧各收 GAP/2）
+const GAP = 2; // 色块缝隙（渲染时两侧各收 GAP/2）
 const TEXT_MIN_W = 88; // 名称+体积可读的最小宽度
 const TEXT_MIN_H = 26; // 名称+体积可读的最小高度
 const SPRING = { type: "spring", stiffness: 300, damping: 30 } as const;
 
-/** 各层亮底（accent-a 占比），随下钻深度递减；更深层取末档 */
-const DEPTH_BASE = [34, 24, 16, 10];
+/* ── 高级感配色系统 ──────────────────────────────────────
+ * 8 个精选色相（低饱和、深色亲和）：顶层块按路径哈希取色，
+ * 同一目录永远同一色 —— 用久了能形成「颜色=目录」的空间记忆；
+ * 下钻后子块继承父色相并做 ± 微漂移，家族色统一、层间有节奏；
+ * 明度随深度递减、随体量微调，块面纵向微渐变 + 顶部高光提质感。 */
+const PALETTE = [212, 174, 262, 330, 24, 152, 198, 286];
+const DEPTH_L = [55, 50, 46, 42]; // 各层基准明度，随下钻递减
+
+function hash01(path: string): number {
+    let h = 0;
+    for (let i = 0; i < path.length; i++) h = (h * 31 + path.charCodeAt(i)) | 0;
+    return Math.abs(h % 1000) / 1000;
+}
 
 interface Rect {
     x: number;
@@ -31,7 +42,7 @@ interface Rect {
 interface Tile {
     node: TreeNode;
     rect: Rect;
-    /** color-mix 中 accent-a 的百分比：按层基准 ± size 占比微调，clamp 到 [8,42] */
+    /** 体量相对层均值的 log2 偏移（clamp ±6）：驱动明度/饱和度微调 */
     pct: number;
 }
 
@@ -51,7 +62,7 @@ function worstRatio(row: { area: number }[], sum: number, side: number): number 
 
 /** 标准 Squarified（Bruls et al.）：size 降序贪心成排铺满 frame。
  *  输出矩形恰好致密平铺（不留缝），1px 缝隙由渲染层统一内缩产生。 */
-export function squarify(children: TreeNode[], frame: Rect, basePct: number): Tile[] {
+export function squarify(children: TreeNode[], frame: Rect): Tile[] {
     const tiles: Tile[] = [];
     if (children.length === 0 || frame.w <= 0 || frame.h <= 0) return tiles;
 
@@ -88,11 +99,10 @@ export function squarify(children: TreeNode[], frame: Rect, basePct: number): Ti
         const thick = sum / side;
         let off = 0;
         const pushTile = (it: (typeof items)[number], rect: Rect) => {
-            // 占比越大越亮：以「相对层均值」为自变量，log2 折半减一档、翻倍加一档，
-            // 每 3 个数量级倍数走满 ±6，最终整体夹回 [8,42]
+            // 体量相对层均值的 log2 偏移（±6）：越大越亮，驱动明度/饱和微调
             const ratioOfAvg = avgSize > 0 ? Math.max(it.node.size, 0) / avgSize : 1;
             const offset = clamp(Math.log2(ratioOfAvg) * 3, -6, 6);
-            tiles.push({ node: it.node, rect, pct: clamp(basePct + offset, 8, 42) });
+            tiles.push({ node: it.node, rect, pct: offset });
         };
 
         if (rest.w >= rest.h) {
@@ -124,7 +134,22 @@ export function TreemapCanvas({ node, onSelectNode }: Props) {
 
     const current = zoomStack[zoomStack.length - 1];
     const layerIndex = zoomStack.length - 1; // 0 = 首层
-    const basePct = DEPTH_BASE[Math.min(layerIndex, DEPTH_BASE.length - 1)];
+    const baseL = DEPTH_L[Math.min(layerIndex, DEPTH_L.length - 1)];
+
+    // 父链色相：顶层块各自从调色板取色；更深层沿面包屑逐级 ± 漂移，形成家族色
+    const parentHue = useMemo(() => {
+        let hue = PALETTE[Math.floor(hash01(zoomStack[0]?.path ?? "") * PALETTE.length) % PALETTE.length];
+        for (let i = 1; i <= layerIndex; i++) {
+            hue = (hue + Math.round((hash01(zoomStack[i].path) - 0.5) * 40) + 360) % 360;
+        }
+        return hue;
+    }, [zoomStack, layerIndex]);
+
+    /** 当前层某块的色相：顶层=调色板哈希取色；深层=父色相 ± 微漂移 */
+    const hueOf = (path: string) =>
+        layerIndex === 0
+            ? PALETTE[Math.floor(hash01(path) * PALETTE.length) % PALETTE.length]
+            : (parentHue + Math.round((hash01(path) - 0.5) * 40) + 360) % 360;
 
     const hostRef = useRef<HTMLDivElement | null>(null);
     const [box, setBox] = useState({ w: 0, h: 0 });
@@ -142,8 +167,8 @@ export function TreemapCanvas({ node, onSelectNode }: Props) {
     const [hoveredKey, setHoveredKey] = useState<string | null>(null);
 
     const tiles = useMemo(
-        () => squarify(current?.children ?? [], { x: 0, y: 0, w: box.w, h: box.h }, basePct),
-        [current, box.w, box.h, basePct],
+        () => squarify(current?.children ?? [], { x: 0, y: 0, w: box.w, h: box.h }),
+        [current, box.w, box.h],
     );
 
     const drill = (child: TreeNode) => {
@@ -194,7 +219,7 @@ export function TreemapCanvas({ node, onSelectNode }: Props) {
                 style={{ background: "var(--zc-surface-2)", borderColor: "var(--zc-border)" }}
             >
                 {tiles.map((t) => {
-                    // 统一内缩 GAP/2，形成恒定 1px 缝隙
+                    // 统一内缩 GAP/2，形成恒定缝隙
                     const r: Rect = {
                         x: t.rect.x + GAP / 2,
                         y: t.rect.y + GAP / 2,
@@ -204,6 +229,11 @@ export function TreemapCanvas({ node, onSelectNode }: Props) {
                     const key = t.node.path || `${t.node.name}#${Math.round(r.x)}x${Math.round(r.y)}`;
                     const hovered = hoveredKey === key;
                     const showText = r.w >= TEXT_MIN_W && r.h >= TEXT_MIN_H;
+                    // 色相:顶层=调色板取色,深层=家族色;明度=层基准±体量;低饱和克制的渐变面
+                    const hue = hueOf(t.node.path);
+                    const L = clamp(baseL + t.pct * 1.4, 28, 66);
+                    const S = clamp(42 + t.pct * 1.2, 30, 56);
+                    const bg = `linear-gradient(165deg, hsl(${hue} ${S}% ${clamp(L + 6, 30, 72)}%) 0%, hsl(${hue} ${clamp(S - 9, 22, 56)}% ${clamp(L - 7, 20, 64)}%) 100%)`;
                     return (
                         <motion.div
                             key={key}
@@ -212,9 +242,13 @@ export function TreemapCanvas({ node, onSelectNode }: Props) {
                             transition={SPRING}
                             className="absolute left-0 top-0 overflow-hidden"
                             style={{
-                                background: `color-mix(in srgb, var(--zc-accent-a) ${t.pct.toFixed(2)}%, var(--zc-surface-2))`,
+                                background: bg,
                                 borderRadius: "var(--zc-r-sm)",
-                                boxShadow: hovered ? "inset 0 0 0 2px var(--zc-accent-b)" : undefined,
+                                boxShadow: hovered
+                                    ? `inset 0 0 0 2px hsl(${hue} 85% 78% / .95), 0 8px 22px -8px hsl(${hue} 80% 45% / .55)`
+                                    : "inset 0 1px 0 hsl(0 0% 100% / .10), inset 0 -1px 0 hsl(0 0% 0% / .16)",
+                                filter: hovered ? "brightness(1.08)" : undefined,
+                                transition: "box-shadow .18s ease, filter .18s ease",
                                 cursor: t.node.children.length > 0 ? "pointer" : "default",
                             }}
                             onClick={(e) => handleTileClick(t.node, e)}
@@ -223,8 +257,16 @@ export function TreemapCanvas({ node, onSelectNode }: Props) {
                         >
                             {showText && (
                                 <div className="pointer-events-none absolute left-2 right-1 top-1.5">
-                                    <div className="truncate text-[12px] font-medium leading-tight">{t.node.name}</div>
-                                    <div className="num truncate text-[10px] leading-tight" style={{ color: "var(--zc-text-2)" }}>
+                                    <div
+                                        className="truncate text-[12px] font-medium leading-tight"
+                                        style={{ color: "white", textShadow: "0 1px 2px rgb(0 0 0 / .45)" }}
+                                    >
+                                        {t.node.name}
+                                    </div>
+                                    <div
+                                        className="num truncate text-[10px] leading-tight"
+                                        style={{ color: "rgb(255 255 255 / .78)", textShadow: "0 1px 2px rgb(0 0 0 / .4)" }}
+                                    >
                                         {humanSize(t.node.size)}
                                     </div>
                                 </div>
