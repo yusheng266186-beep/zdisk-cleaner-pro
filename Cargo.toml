@@ -7,7 +7,7 @@ members = ["crates/zc-core", "crates/zc-rules", "crates/zc-cli", "src-tauri"]
 default-members = ["crates/zc-core", "crates/zc-rules", "crates/zc-cli"]
 
 [workspace.package]
-version = "3.0.6"
+version = "4.0.0"
 edition = "2021"
 license = "MIT"
 authors = ["yusheng"]
@@ -35,3 +35,4 @@ windows-sys = { version = "0.59", features = [
 [profile.release]
 lto = "thin"
 strip = "symbols"
+codegen-units = 1

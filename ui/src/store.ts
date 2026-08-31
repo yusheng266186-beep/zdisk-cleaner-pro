@@ -56,6 +56,12 @@ interface StoreState {
     undoSession: (id: string) => Promise<void>;
     undoLast: () => Promise<void>;
     purgeSession: (id: string) => Promise<void>;
+    /** 手动安全删除（大文件/重复文件/雷达/工具箱共用）：守卫+暂存区+台账，可还原 */
+    manualDelete: (paths: string[]) => Promise<void>;
+    /** 迁移全局任务：跨页存活，完成后无论在哪个页面都弹通知 */
+    migrateActive: boolean;
+    migrateInfo: { src: string; dst: string } | null;
+    runMigration: (src: string, dst: string) => Promise<string>;
     setExpanded: (id: string | null) => void;
     togglePalette: (open?: boolean) => void;
     toast: (kind: Toast["kind"], msg: string) => void;
@@ -87,6 +93,8 @@ export const useStore = create<StoreState>((set, get) => ({
     paletteOpen: false,
     toasts: [],
     pendingMigrateSrc: null,
+    migrateActive: false,
+    migrateInfo: null,
 
     async init() {
         document.documentElement.dataset.theme = get().theme;
@@ -226,6 +234,41 @@ export const useStore = create<StoreState>((set, get) => ({
             get().toast("ok", msg);
         } catch (e) {
             get().toast("err", `彻底删除失败：${e instanceof Error ? e.message : String(e)}`);
+        }
+    },
+
+    async manualDelete(paths) {
+        if (paths.length === 0) {
+            get().toast("warn", "没有可删除的路径");
+            return;
+        }
+        try {
+            const outcome = await ipc.vaultDelete(paths);
+            // 刷新台账历史并选中该批，历史页立即可还原/彻底删除
+            try {
+                const history = await ipc.loadHistory();
+                set({ history, lastSessionId: null });
+            } catch { /* 历史刷新失败不阻断主流程 */ }
+            const n = outcome.failed.length;
+            get().toast(n ? "warn" : "ok", outcome.semantics_note);
+        } catch (e) {
+            get().toast("err", `安全删除失败：${e instanceof Error ? e.message : String(e)}`);
+        }
+    },
+
+    async runMigration(src, dst) {
+        if (get().migrateActive) throw new Error("已有迁移任务在进行");
+        set({ migrateActive: true, migrateInfo: { src, dst } });
+        try {
+            const id = await ipc.applyMigration(src, dst);
+            get().toast("ok", `迁移完成：${src} 已由 junction 接管（可在历史/迁移中心撤销）`);
+            return id;
+        } catch (e) {
+            // 内核失败即自动回滚；无论用户当前在哪个页面都要把结果送到眼前
+            get().toast("err", `迁移失败（已自动回滚）：${e instanceof Error ? e.message : String(e)}`);
+            throw e;
+        } finally {
+            set({ migrateActive: false });
         }
     },
 

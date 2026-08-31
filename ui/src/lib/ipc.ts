@@ -171,10 +171,25 @@ export async function appVersion(): Promise<string> {
 
 /* ── 空间雷达 ─────────────────────────────────────────── */
 
-export async function analyzeTree(path = "", depth = 4): Promise<TreeNode> {
+export async function analyzeTree(path = "", depth = 4, fresh = false): Promise<TreeNode> {
     if (!isDesktop()) return SAMPLE_TREE;
     const { invoke } = await import("@tauri-apps/api/core");
-    return invoke<TreeNode>("analyze_tree", { path, depth });
+    return invoke<TreeNode>("analyze_tree", { path, depth, fresh });
+}
+
+/** 手动安全删除：任意路径走守卫 + 暂存区 + 台账，可在历史页还原。
+ *  大文件 / 重复文件冗余份 / 雷达选中目录的手动清理共用这一个入口。 */
+export async function vaultDelete(paths: string[]): Promise<CleanOutcome> {
+    if (!isDesktop()) {
+        await new Promise((r) => setTimeout(r, 800));
+        return {
+            requested_files: paths.length, requested_bytes: 0,
+            done_files: paths.length, done_bytes: 0,
+            failed: [], semantics_note: "[演示] 已移入暂存区，可在历史页还原",
+        };
+    }
+    const { invoke } = await import("@tauri-apps/api/core");
+    return invoke<CleanOutcome>("vault_delete", { paths });
 }
 
 /** 在资源管理器中打开目录。浏览器开发态无壳可调，直接 resolve。 */

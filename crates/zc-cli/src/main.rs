@@ -32,6 +32,7 @@ fn run(args: &[String]) -> zc_core::Result<ExitCode> {
         Some("apply") => cmd_apply(args),
         Some("undo") => cmd_undo(args),
         Some("purge") => cmd_purge(args),
+        Some("vault") => cmd_vault(args),
         Some("sweep") => cmd_sweep(),
         Some("show") => cmd_show(args),
         Some("rules") => cmd_rules(args),
@@ -58,6 +59,7 @@ fn print_help() {
           [--admin]           需要管理员的规则走一次性 UAC 提权批
   undo SESSION-ID             还原 vault 批次
   purge SESSION-ID            彻底删除 vault 批次副本（真正释放空间，不可还原）
+  vault P1 [P2...]            手动安全删除：任意路径走守卫+暂存区+台账（可还原）
   sweep                       清扫全部超过 7 天后悔期的 vault 批次
   show REPORT                 展示历史报告
   rules [--md]                规则列表 / Markdown 手册
@@ -364,6 +366,54 @@ fn cmd_purge(args: &[String]) -> Result<ExitCode> {
         println!("  （{} 项保留台账，可重试或照常还原）", failed.len());
     }
     Ok(ExitCode::SUCCESS)
+}
+
+fn cmd_vault(args: &[String]) -> Result<ExitCode> {
+    let paths: Vec<PathBuf> = args[1..].iter().map(PathBuf::from).collect();
+    if paths.is_empty() {
+        return Err(Error::Other("用法: zclean vault P1 [P2...]".into()));
+    }
+    let existing: Vec<&Path> = paths.iter().map(|p| p.as_path()).filter(|p| p.exists()).collect();
+    if existing.is_empty() {
+        return Err(Error::Other("所有路径都不存在".into()));
+    }
+    crate::guard_check(&existing)?;
+    let session = format!("manual-{}", zc_core::scanner::now_unix());
+    let session_dir = zc_core::executor::vault::vault_session_dir(&session);
+    let (ok, failed) = zc_core::executor::vault::stash(&session_dir, &existing);
+    let mut bytes = 0u64;
+    let entries: Vec<zc_core::manifest::ManifestEntry> = ok
+        .iter()
+        .map(|(o, d)| {
+            bytes += zc_core::executor::vault::actual_size(d);
+            zc_core::manifest::ManifestEntry {
+                origin: o.display().to_string(),
+                vault_rel: d.display().to_string(),
+                size: zc_core::executor::vault::actual_size(d),
+            }
+        })
+        .collect();
+    zc_core::manifest::CleanManifest {
+        id: session.clone(),
+        created_unix: zc_core::scanner::now_unix(),
+        mode: CleanMode::Vault,
+        entries,
+    }
+    .save()?;
+    println!(
+        "已移入暂存区 {} 项 / {} 字节；反悔通道: zclean undo {}",
+        ok.len(),
+        format_number(bytes),
+        session
+    );
+    for (p, e) in failed.iter().take(20) {
+        println!("  ✗ {} — {e}", p.display());
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+fn guard_check(paths: &[&Path]) -> Result<()> {
+    zc_core::guard::Guard::new().vet(paths.iter().copied())
 }
 
 fn cmd_sweep() -> Result<ExitCode> {

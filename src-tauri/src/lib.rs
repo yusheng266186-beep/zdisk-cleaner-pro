@@ -69,6 +69,7 @@ pub fn run() {
             clean_selected,
             undo_session,
             purge_session,
+            vault_delete,
             rules_meta,
             history_list,
             drives_overview,
@@ -192,6 +193,19 @@ struct OutcomeDto {
     semantics_note: String,
 }
 
+impl OutcomeDto {
+    fn from_core(o: zc_core::executor::CleanOutcome) -> Self {
+        Self {
+            requested_files: o.requested_files,
+            requested_bytes: o.requested_bytes,
+            done_files: o.done_files,
+            done_bytes: o.done_bytes,
+            failed: o.failed,
+            semantics_note: o.semantics_note,
+        }
+    }
+}
+
 #[tauri::command]
 async fn clean_selected(
     report: ScanReport,
@@ -207,6 +221,7 @@ async fn clean_selected(
             files: outcome.done_files,
             bytes_moved: outcome.done_bytes,
         });
+        analyze_cache_invalidate();
         Ok(OutcomeDto {
             requested_files: outcome.requested_files,
             requested_bytes: outcome.requested_bytes,
@@ -225,6 +240,7 @@ async fn undo_session(id: String) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let m = manifest::CleanManifest::load(&id).map_err(|e| e.to_string())?;
         let (done, failed) = m.undo().map_err(|e| e.to_string())?;
+        analyze_cache_invalidate();
         if failed.is_empty() {
             Ok(format!("已还原 {done}/{} 项", m.entries.len()))
         } else {
@@ -247,6 +263,7 @@ async fn purge_session(id: String) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let m = manifest::CleanManifest::load(&id).map_err(|e| e.to_string())?;
         let (deleted, freed, failed) = m.purge_forever().map_err(|e| e.to_string())?;
+        analyze_cache_invalidate();
         if failed.is_empty() {
             Ok(format!(
                 "已彻底删除 {deleted} 项，实际释放 {}（台账已抹除，本批不可再还原）",
@@ -326,11 +343,23 @@ async fn drives_overview() -> Vec<DriveDto> {
     .unwrap_or_default()
 }
 
+/// 空间雷达体积树缓存：同一 (根, 深度) 10 分钟内直接复用。
+/// 任何会改动磁盘Tree形态的操作（清理/撤销/彻底删除/手动删除/迁移）都会失效它。
+/// 主目录整树要遍历数十万文件（约 1 分钟），缓存让二次进入零等待。
+static ANALYZE_CACHE: OnceLock<std::sync::Mutex<Option<(String, u32, analyze::TreeNode, std::time::Instant)>>> =
+    OnceLock::new();
+
+fn analyze_cache_invalidate() {
+    if let Some(m) = ANALYZE_CACHE.get() {
+        *m.lock().unwrap() = None;
+    }
+}
+
 /// 空间雷达：构建目录体积聚合树（并行单遍遍历 + 深度/宽度双上限收敛）。
 /// path 为空时默认取用户主目录；depth 超过 6 时截断，防 UI 爆量。
-/// spawn_blocking 执行——主目录遍历可达数十万文件，绝不能占主线程。
+/// fresh=true 跳过缓存读取（「刷新」按钮用）；spawn_blocking 执行。
 #[tauri::command]
-async fn analyze_tree(path: String, depth: u32) -> Result<analyze::TreeNode, String> {
+async fn analyze_tree(path: String, depth: u32, fresh: Option<bool>) -> Result<analyze::TreeNode, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let root = if path.is_empty() {
             std::env::var("USERPROFILE")
@@ -338,14 +367,97 @@ async fn analyze_tree(path: String, depth: u32) -> Result<analyze::TreeNode, Str
         } else {
             path
         };
-        analyze::build_tree(
+        let depth = depth.min(6);
+        let fresh = fresh.unwrap_or(false);
+        if !fresh {
+            if let Some(m) = ANALYZE_CACHE.get() {
+                let guard = m.lock().unwrap();
+                if let Some((r, d, tree, at)) = guard.as_ref() {
+                    if *r == root && *d == depth && at.elapsed() < std::time::Duration::from_secs(600) {
+                        return Ok(tree.clone());
+                    }
+                }
+            }
+        }
+        let tree = analyze::build_tree(
             Path::new(&root),
-            analyze::TreeOptions { max_depth: depth.min(6), max_children: 40 },
+            analyze::TreeOptions { max_depth: depth, max_children: 40 },
         )
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+        let m = ANALYZE_CACHE.get_or_init(|| Default::default());
+        *m.lock().unwrap() = Some((root, depth, tree.clone(), std::time::Instant::now()));
+        Ok(tree)
     })
     .await
     .map_err(|_| "雷达后台任务失败".to_string())?
+}
+
+/// 手动安全删除：任意路径走「守卫 vet（fail-closed）→ vault 暂存 → 台账」，
+/// 全程可还原（历史页 7 天内一键还原 / 彻底删除）。
+/// 大文件、重复文件冗余份、空间雷达选中目录的手动清理共用这一个入口。
+#[tauri::command]
+async fn vault_delete(paths: Vec<String>) -> Result<OutcomeDto, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let refs: Vec<PathBuf> = paths.iter().map(PathBuf::from).collect();
+        let mut outcome = executor::CleanOutcome {
+            requested_files: refs.len() as u64,
+            ..Default::default()
+        };
+        outcome.semantics_note =
+            "已移入暂存区 vault：7 天内可在历史页一键还原".to_string();
+        let existing: Vec<&Path> = refs.iter().map(|p| p.as_path()).filter(|p| p.exists()).collect();
+        if existing.is_empty() {
+            return Ok(OutcomeDto::from_core(outcome));
+        }
+        zc_core::guard::Guard::new().vet(existing.iter().copied()).map_err(|e| e.to_string())?;
+
+        let session = format!("manual-{}", scanner::now_unix());
+        let session_dir = zc_core::executor::vault::vault_session_dir(&session);
+        let (ok, failed) = zc_core::executor::vault::stash(&session_dir, &existing);
+        // 记账用副本实测字节（目录=子树求和），与 vault 实重严格一致
+        for (_, dst) in &ok {
+            outcome.done_bytes += zc_core::executor::vault::actual_size(dst);
+        }
+        outcome.done_files = ok.len() as u64;
+        outcome
+            .failed
+            .extend(failed.into_iter().map(|(p, e)| (p.display().to_string(), e)));
+
+        let entries = ok
+            .iter()
+            .map(|(o, d)| manifest::ManifestEntry {
+                origin: o.display().to_string(),
+                vault_rel: d.display().to_string(),
+                size: zc_core::executor::vault::actual_size(d),
+            })
+            .collect();
+        manifest::CleanManifest {
+            id: session.clone(),
+            created_unix: scanner::now_unix(),
+            mode: executor::CleanMode::Vault,
+            entries,
+        }
+        .save()
+        .map_err(|e| e.to_string())?;
+        let _ = history::append(&HistoryRecord {
+            session_id: session,
+            created_unix: scanner::now_unix(),
+            mode: executor::CleanMode::Vault,
+            files: outcome.done_files,
+            bytes_moved: outcome.done_bytes,
+        });
+        analyze_cache_invalidate();
+        if !outcome.failed.is_empty() {
+            outcome.semantics_note = format!(
+                "{}；另有 {} 项未能处理（多为文件被占用），已原样保留",
+                outcome.semantics_note,
+                outcome.failed.len()
+            );
+        }
+        Ok(OutcomeDto::from_core(outcome))
+    })
+    .await
+    .map_err(|_| "手动删除后台任务失败".to_string())?
 }
 
 /* ── 大文件 / 重复文件猎手 ──────────────────────────────── */
@@ -458,7 +570,7 @@ fn migrate_state_str(s: migrate::PhaseState) -> &'static str {
 /// UI 显示的是内核真实步骤边界，不是估算进度。
 #[tauri::command]
 async fn migrate_apply(app: tauri::AppHandle, src: String, dst_root: String) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+    let id: String = tauri::async_runtime::spawn_blocking(move || {
         let plan =
             migrate::plan(Path::new(&src), Path::new(&dst_root)).map_err(|e| e.to_string())?;
         migrate::apply_with_phases(&plan, &mut |phase, state| {
@@ -471,15 +583,21 @@ async fn migrate_apply(app: tauri::AppHandle, src: String, dst_root: String) -> 
     })
     .await
     .map_err(|_| "迁移后台任务失败".to_string())?
+    .map_err(|e| e)?;
+    // junction 落盘后体积树形态已变，雷达缓存失效
+    analyze_cache_invalidate();
+    Ok(id)
 }
 
 /// 手动兜底撤销：摘 junction 并把 `.old` 备份复位为源目录。
 #[tauri::command]
 fn migrate_undo(src: String, dst: Option<String>) -> Result<String, String> {
-    migrate::undo(
+    let msg = migrate::undo(
         Path::new(&src),
         dst.as_deref().map(Path::new),
-    )
+    )?;
+    analyze_cache_invalidate();
+    Ok(msg)
 }
 
 /* ── 空间雷达实用动作 ───────────────────────────────────── */

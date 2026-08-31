@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { CSSProperties } from "react";
 import { motion } from "motion/react";
-import { Copy, Crosshair, Fingerprint } from "lucide-react";
+import { Archive, Copy, Crosshair, Fingerprint  } from "lucide-react";
 import * as ipc from "../lib/ipc";
 import type { DuplicateGroup } from "../lib/ipc";
 import { humanSize } from "../lib/format";
@@ -23,6 +23,24 @@ export function Duplicates() {
     // 空结果态口径要贴本次实跑的门限，而不是输入框的即时值
     const [ranMinMb, setRanMinMb] = useState(10);
     const [hunting, setHunting] = useState(false);
+    const [cleaningKey, setCleaningKey] = useState<string | null>(null);
+    const [confirmKey, setConfirmKey] = useState<string | null>(null);
+
+    /** 清理本组冗余份数：保留第 1 份（建议保留），其余进暂存区（台账可还原） */
+    async function cleanGroup(gi: number) {
+        const g = groups?.[gi];
+        if (!g || cleaningKey) return;
+        const redundant = g.files.slice(1);
+        if (redundant.length === 0) return;
+        setCleaningKey(g.hash + "-" + gi);
+        try {
+            await useStore.getState().manualDelete(redundant);
+            setGroups((list) => (list ? list.filter((_, i) => i !== gi) : list));
+        } finally {
+            setCleaningKey(null);
+            setConfirmKey(null);
+        }
+    }
 
     /** 可回收合计 = 每组保留 1 份后可释放的字节：Σ size × (份数 - 1) */
     const reclaimed = (groups ?? []).reduce(
@@ -189,12 +207,40 @@ export function Duplicates() {
                                             · 建议保留最新
                                         </span>
                                         <span
-                                            className="num ml-auto text-[11px]"
+                                            className="num text-[11px]"
                                             style={{ color: "var(--zc-text-3)" }}
                                             title="去掉冗余份数后本组可回收"
                                         >
                                             −{humanSize(g.size * (g.files.length - 1))}
                                         </span>
+                                        {desktop && g.files.length > 1 && (
+                                            <button
+                                                onClick={() => {
+                                                    const k = g.hash + "-" + gi;
+                                                    if (confirmKey === k) { void cleanGroup(gi); }
+                                                    else {
+                                                        setConfirmKey(k);
+                                                        setTimeout(() => setConfirmKey((c) => (c === k ? null : c)), 4000);
+                                                    }
+                                                }}
+                                                disabled={cleaningKey === g.hash + "-" + gi}
+                                                className="ml-auto flex shrink-0 items-center gap-1 rounded-lg px-2.5 py-1 text-[11px] font-medium transition-transform active:scale-95 disabled:opacity-50"
+                                                style={{
+                                                    background: confirmKey === g.hash + "-" + gi
+                                                        ? "color-mix(in srgb, var(--zc-danger) 18%, transparent)"
+                                                        : "color-mix(in srgb, var(--zc-accent-b) 14%, transparent)",
+                                                    color: confirmKey === g.hash + "-" + gi ? "var(--zc-danger)" : "var(--zc-accent-b)",
+                                                }}
+                                                title="保留第 1 份，其余移入暂存区（可在历史页还原）"
+                                            >
+                                                <Archive size={12} />
+                                                {cleaningKey === g.hash + "-" + gi
+                                                    ? "搬运中…"
+                                                    : confirmKey === g.hash + "-" + gi
+                                                        ? "再点一次确认"
+                                                        : "清理冗余 " + (g.files.length - 1) + " 份"}
+                                            </button>
+                                        )}
                                     </div>
                                     <div className="mt-2 flex flex-col gap-1">
                                         {g.files.map((f, fi) => (

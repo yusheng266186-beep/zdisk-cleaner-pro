@@ -35,6 +35,7 @@ const NAV: { id: Page; label: string; icon: typeof HeartPulse }[] = [
 export default function App() {
     const version = useStore((s) => s.version);
     const appVer = useStore((s) => s.appVersion);
+    const migrateActive = useStore((s) => s.migrateActive);
     const init = useStore((s) => s.init);
     // 页面路由提升进 store：雷达页「作为迁移源」等跨页跳转可复用 setActivePage
     const page = useStore((s) => s.activePage);
@@ -98,6 +99,25 @@ export default function App() {
                     })}
 
                     <div className="mt-auto flex flex-col gap-2 px-2">
+                        {migrateActive && (
+                            <button
+                                onClick={() => setPage("migrate")}
+                                className="flex items-center gap-2 rounded-lg border px-2.5 py-2 text-left text-[11px] transition-colors hover:opacity-80"
+                                style={{
+                                    borderColor: "color-mix(in srgb, var(--zc-accent-b) 45%, transparent)",
+                                    background: "color-mix(in srgb, var(--zc-accent-b) 10%, transparent)",
+                                    color: "var(--zc-text-1)",
+                                }}
+                            >
+                                <motion.span
+                                    animate={{ opacity: [1, 0.35, 1] }}
+                                    transition={{ repeat: Infinity, duration: 1.4 }}
+                                    className="h-2 w-2 shrink-0 rounded-full"
+                                    style={{ background: "var(--zc-accent-b)" }}
+                                />
+                                迁移后台进行中…<span className="ml-auto text-[10px]" style={{ color: "var(--zc-text-3)" }}>查看</span>
+                            </button>
+                        )}
                         <button
                             onClick={() => useStore.getState().togglePalette(true)}
                             className="flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-[11px] transition-colors hover:bg-white/5"

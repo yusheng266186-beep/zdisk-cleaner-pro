@@ -1,8 +1,10 @@
+import { useEffect, useState } from "react";
 import { HardDrive, Sparkles, ShieldCheck, CircleStop } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { Ring } from "../components/Ring";
 import { RollNumber } from "../components/RollNumber";
 import { cleanableText, useStore } from "../store";
+import { thousand } from "../lib/format";
 import { pageVariants, springSnappy } from "../lib/motion";
 
 export function Home() {
@@ -72,6 +74,7 @@ export function Home() {
 
                 <h1 className="mt-7 text-2xl font-semibold">
                     {scanning ? "正在体检…" : "磁盘体检，一键开始"}
+                    {scanning && <ScanRate />}
                 </h1>
                 <p className="mt-2 max-w-md text-center text-sm leading-relaxed" style={{ color: "var(--zc-text-2)" }}>
                     {scanning
@@ -147,3 +150,22 @@ function pctOfLargest(drives: { total_bytes: number; free_bytes: number }[]): nu
 
 // 引用避免未用告警（真实文本在 toast 中使用）
 void cleanableText;
+
+
+/** 扫描速率条：已用时与实时 项/s（前端自计时，内核只报累计值）。 */
+function ScanRate() {
+    const [start] = useState(() => Date.now());
+    const [, force] = useState(0);
+    useEffect(() => {
+        const t = setInterval(() => force((x) => x + 1), 500);
+        return () => clearInterval(t);
+    }, []);
+    const files = useStore((s) => s.scanFiles);
+    const secs = Math.max((Date.now() - start) / 1000, 0.1);
+    const rate = files / secs;
+    return (
+        <p className="mt-2 text-center text-[11px] num" style={{ color: "var(--zc-text-3)" }}>
+            已用时 {secs.toFixed(1)}s · {thousand(Math.round(rate))} 项/s · 可随时取消
+        </p>
+    );
+}

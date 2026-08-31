@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import type { CSSProperties } from "react";
 import { AnimatePresence, motion } from "motion/react";
-import { FolderOpen, FolderOutput, RefreshCcw } from "lucide-react";
+import { Archive, FolderOpen, FolderOutput, RefreshCcw, Trash2 } from "lucide-react";
 import { TreemapCanvas } from "../components/TreemapCanvas";
 import { analyzeTree, isDesktop, revealInExplorer } from "../lib/ipc";
 import type { TreeNode } from "../lib/tree";
@@ -17,6 +17,7 @@ export function Radar() {
     const [tree, setTree] = useState<TreeNode | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [tick, setTick] = useState(0);
+    const [purgeArm, setPurgeArm] = useState(false);
     // treemap 选中节点：点叶子或 shift+点击任意块后出现底部选中条
     const [selected, setSelected] = useState<TreeNode | null>(null);
 
@@ -28,7 +29,7 @@ export function Radar() {
     useEffect(() => {
         let alive = true;
         setError(null);
-        analyzeTree("", 4)
+        analyzeTree("", 4, tick > 0)
             .then((t) => {
                 if (alive) setTree(t);
             })
@@ -44,8 +45,16 @@ export function Radar() {
         setTree(null); // 回到骨架加载态
         setError(null);
         setSelected(null); // 旧树的选中节点随之失效
+        setPurgeArm(false);
         setTick((t) => t + 1);
     }, []);
+
+    /** 选中目录安全删除：守卫 + 暂存区 + 台账，可还原；成功后重建体积树 */
+    async function stashSelected() {
+        if (!selected) return;
+        await useStore.getState().manualDelete([selected.path]);
+        refresh();
+    }
 
     /** 在资源管理器打开选中目录（仅桌面壳有该按钮） */
     async function openInExplorer() {
@@ -175,6 +184,24 @@ export function Radar() {
                             }}
                         >
                             <FolderOutput size={13} /> 作为迁移源
+                        </button>
+                        <button
+                            onClick={() => {
+                                if (purgeArm) { void stashSelected(); }
+                                else {
+                                    setPurgeArm(true);
+                                    setTimeout(() => setPurgeArm(false), 4000);
+                                }
+                            }}
+                            className="flex shrink-0 items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs font-medium transition-colors hover:opacity-75"
+                            style={{
+                                borderColor: purgeArm ? "var(--zc-danger)" : "var(--zc-border-strong)",
+                                color: purgeArm ? "var(--zc-danger)" : "var(--zc-text-2)",
+                            }}
+                            title="移入暂存区（守卫校验，可在历史页 7 天内还原）"
+                        >
+                            {purgeArm ? <Trash2 size={13} /> : <Archive size={13} />}
+                            {purgeArm ? "再点一次确认删除" : "移入暂存区"}
                         </button>
                     </motion.div>
                 )}

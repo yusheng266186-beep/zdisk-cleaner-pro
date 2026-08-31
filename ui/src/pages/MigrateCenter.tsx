@@ -78,8 +78,10 @@ export function MigrateCenter() {
         try {
             // 先订阅内核真实阶段事件，再发起迁移 —— Start/End 推送驱动文案条
             unlisten = await ipc.onMigratePhase((p) => setCurrentPhaseLabel(PHASE_LABEL[p.phase]));
-            // 后端会以当前参数重新 plan 校验，防跨参数篡改
-            const id = await ipc.applyMigration(src.trim(), dstRoot.trim());
+            // 后端会以当前参数重新 plan 校验，防跨参数篡改。
+            // v4.0：执行体搬进 store 全局任务 —— 用户切到任何页面都不中断，
+            // 完成/失败通知全局可达，侧栏有「迁移后台进行中」指示。
+            const id = await useStore.getState().runMigration(src.trim(), dstRoot.trim());
             setResultId(id);
             setUndoMsg(null);
             setStep("done");

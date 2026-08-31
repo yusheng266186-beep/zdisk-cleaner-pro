@@ -321,6 +321,9 @@ def step_scan(cdp, label="scan"):
 
 
 def _cdp_input_mouse(cdp, typ, x, y, button="left"):
+    # 已知陷阱:WebView2 高 DPI(dpr=2)下 CDP Input 坐标存在设备/CSS 像素换算歧义,
+    # 点击可能落到视口左上角 —— 需要精确命中时改用元素级合成事件
+    # (new MouseEvent('click', {shiftKey, bubbles}) 直达 React 处理器)。
     cdp.mid += 1
     req = json.dumps({"id": cdp.mid, "method": "Input.dispatchMouseEvent", "params": {
         "type": typ, "x": x, "y": y, "button": button, "clickCount": 1}})

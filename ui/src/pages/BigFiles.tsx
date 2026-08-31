@@ -1,14 +1,14 @@
 import { useState } from "react";
 import type { CSSProperties } from "react";
 import { motion } from "motion/react";
-import { Crosshair, ScanSearch } from "lucide-react";
+import { Archive, Crosshair, ScanSearch } from "lucide-react";
 import * as ipc from "../lib/ipc";
 import type { BigFile } from "../lib/ipc";
 import { humanSize, thousand } from "../lib/format";
 import { cascade, pageVariants } from "../lib/motion";
 import { useStore } from "../store";
 
-/** 大文件页：Top-N 大文件扫描（内核单遍 jwalk + 小顶堆），只报告，不动手。 */
+/** 大文件页：Top-N 大文件扫描（内核单遍 jwalk + 小顶堆）；每行可安全移入暂存区（台账可还原）。 */
 
 const msgOf = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
@@ -22,6 +22,19 @@ export function BigFiles() {
     const [top, setTop] = useState(50);
     const [files, setFiles] = useState<BigFile[] | null>(null);
     const [scanning, setScanning] = useState(false);
+    const [stashing, setStashing] = useState<string | null>(null);
+
+    /** 单文件安全删除：进暂存区，台账可还原；成功后本地移除该行 */
+    async function stashOne(f: BigFile) {
+        if (stashing) return;
+        setStashing(f.path);
+        try {
+            await useStore.getState().manualDelete([f.path]);
+            setFiles((list) => (list ? list.filter((x) => x.path !== f.path) : list));
+        } finally {
+            setStashing(null);
+        }
+    }
 
     async function run() {
         if (scanning) return;
@@ -154,13 +167,27 @@ export function BigFiles() {
                                     {f.path}
                                 </span>
                                 {desktop && (
-                                    <button
-                                        onClick={() => void locate(f.path)}
-                                        className="flex shrink-0 items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs transition-colors hover:opacity-75"
-                                        style={{ borderColor: "var(--zc-border-strong)", color: "var(--zc-text-2)" }}
-                                    >
-                                        <Crosshair size={13} /> 定位
-                                    </button>
+                                    <>
+                                        <button
+                                            onClick={() => void locate(f.path)}
+                                            className="flex shrink-0 items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs transition-colors hover:opacity-75"
+                                            style={{ borderColor: "var(--zc-border-strong)", color: "var(--zc-text-2)" }}
+                                        >
+                                            <Crosshair size={13} /> 定位
+                                        </button>
+                                        <button
+                                            onClick={() => void stashOne(f)}
+                                            disabled={stashing === f.path}
+                                            className="flex shrink-0 items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-medium transition-transform active:scale-95 disabled:opacity-50"
+                                            style={{
+                                                background: "color-mix(in srgb, var(--zc-accent-b) 14%, transparent)",
+                                                color: "var(--zc-accent-b)",
+                                            }}
+                                            title="移入暂存区，7 天内可在历史页还原"
+                                        >
+                                            <Archive size={13} /> {stashing === f.path ? "搬运中…" : "暂存区"}
+                                        </button>
+                                    </>
                                 )}
                             </motion.div>
                         ))}
