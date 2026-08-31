@@ -82,7 +82,7 @@ function DismCard({ toast }: { toast: (kind: "ok" | "warn" | "err" | "info", msg
                         <span>DISM /StartComponentCleanup 执行中…</span>
                         <span className="num">{pct}%</span>
                     </div>
-                    <div className="mt-1.5 h-2 overflow-hidden rounded-full" style={{ background: "var(--zc-surface-3)" }}>
+                    <div className="mt-1.5 h-2 overflow-hidden rounded-full" >
                         <motion.div
                             className="h-full rounded-full"
                             style={{ background: "linear-gradient(135deg,var(--zc-accent-a),var(--zc-accent-b))" }}
@@ -237,7 +237,7 @@ function OccupancyCard({ toast }: { toast: (kind: "ok" | "warn" | "err" | "info"
             {items === null ? (
                 <div className="mt-3 flex flex-col gap-2" aria-hidden>
                     {[0, 1, 2].map((i) => (
-                        <div key={i} className="h-9 animate-pulse rounded-lg" style={{ background: "var(--zc-surface-3)" }} />
+                        <div key={i} className="h-9 zc-shimmer rounded-lg"  />
                     ))}
                 </div>
             ) : items.length === 0 ? (

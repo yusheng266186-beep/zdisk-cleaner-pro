@@ -215,7 +215,7 @@ function Skeleton() {
     const blockStyle = (bg: string): CSSProperties => ({ background: bg, borderRadius: "var(--zc-r-sm)" });
     return (
         <div
-            className={`mt-5 ${CANVAS_H} animate-pulse overflow-hidden rounded-xl border p-1`}
+            className={`mt-5 ${CANVAS_H} zc-shimmer overflow-hidden rounded-xl border p-1`}
             style={{ background: "var(--zc-surface-1)", borderColor: "var(--zc-border)" }}
         >
             <div className="flex h-full gap-1">

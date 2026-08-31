@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import { AnimatePresence, MotionConfig, motion } from "motion/react";
-import { HeartPulse, Wrench, History, Settings, Command, Radar, Rocket, FolderOutput, FileSearch, Copy, ShieldCheck } from "lucide-react";
+import { Sparkle, HeartPulse, Wrench, History, Settings, Command, Radar, Rocket, FolderOutput, FileSearch, Copy, ShieldCheck  } from "lucide-react";
 import { Home } from "./pages/Home";
 import { Results } from "./pages/Results";
 import { History as HistoryPage } from "./pages/History";
@@ -58,18 +58,35 @@ export default function App() {
                     className="flex w-52 shrink-0 flex-col gap-0.5 border-r p-3"
                     style={{ background: "var(--zc-surface-1)", borderColor: "var(--zc-border)" }}
                 >
-                    <div className="mb-5 flex items-center gap-2 px-2 pt-2">
+                    <div className="mb-4 flex items-center gap-2.5 px-2 pt-2">
                         <div
-                            className="h-8 w-8 rounded-lg"
-                            style={{ background: "linear-gradient(135deg,var(--zc-accent-a),var(--zc-accent-b))" }}
-                        />
-                        <div>
-                            <div className="text-sm font-semibold">ZDiskCleaner Pro</div>
-                            <div className="text-[10px]" style={{ color: "var(--zc-text-3)" }}>
-                                v{appVer || "…"} · core {version.replace(/^zc-core v/, "") || "…"}
+                            className="grid h-9 w-9 place-items-center rounded-xl"
+                            style={{
+                                background: "var(--zc-grad-brand)",
+                                boxShadow: "0 6px 18px -6px color-mix(in srgb, var(--zc-accent-b) 55%, transparent), inset 0 1px 0 rgb(255 255 255 / .35)",
+                            }}
+                        >
+                            <Sparkle size={17} color="#fff" strokeWidth={2.4} />
+                        </div>
+                        <div className="min-w-0">
+                            <div className="text-sm font-semibold tracking-tight">ZDiskCleaner Pro</div>
+                            <div className="mt-0.5 flex items-center gap-1.5">
+                                <span
+                                    className="rounded-full px-1.5 py-px text-[9px] font-medium"
+                                    style={{ background: "var(--zc-surface-3)", color: "var(--zc-text-2)" }}
+                                >
+                                    v{appVer || "…"}
+                                </span>
+                                <span className="text-[10px]" style={{ color: "var(--zc-text-3)" }}>
+                                    core {version.replace(/^zc-core v/, "") || "…"}
+                                </span>
                             </div>
                         </div>
                     </div>
+                    <div
+                        className="mx-2 mb-3 h-px"
+                        style={{ background: "var(--zc-hairline)" }}
+                    />
 
                     {NAV.map(({ id, label, icon: Icon }) => {
                         const active = page === id || (id === "home" && page === "results");
@@ -77,7 +94,7 @@ export default function App() {
                             <button
                                 key={id}
                                 onClick={() => setPage(id)}
-                                className="relative flex items-center gap-2.5 rounded-xl px-3 py-2 text-sm transition-colors"
+                                className="relative flex items-center gap-2.5 rounded-xl px-3 py-2 text-sm transition-colors hover:bg-white/4"
                                 style={{ color: active ? "var(--zc-text-1)" : "var(--zc-text-2)" }}
                             >
                                 {active && (

@@ -7,7 +7,7 @@ members = ["crates/zc-core", "crates/zc-rules", "crates/zc-cli", "src-tauri"]
 default-members = ["crates/zc-core", "crates/zc-rules", "crates/zc-cli"]
 
 [workspace.package]
-version = "4.0.0"
+version = "4.1.0"
 edition = "2021"
 license = "MIT"
 authors = ["yusheng"]

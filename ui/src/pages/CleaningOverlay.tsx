@@ -36,9 +36,15 @@ export function CleaningOverlay() {
                     <motion.div
                         initial={{ scale: 0.94, y: 16 }}
                         animate={{ scale: 1, y: 0, transition: { type: "spring", stiffness: 300, damping: 28 } }}
-                        className="w-[min(440px,88vw)] rounded-2xl border p-7 text-center"
-                        style={{ background: "var(--zc-surface-1)", borderColor: "var(--zc-border-strong)", boxShadow: "var(--zc-shadow-pop)" }}
+                        className="relative w-[min(440px,88vw)] overflow-hidden rounded-2xl border p-7 pt-8 text-center"
+                        style={{
+                            background: "color-mix(in srgb, var(--zc-surface-1) 76%, transparent)",
+                            borderColor: "var(--zc-border-strong)",
+                            boxShadow: "var(--zc-shadow-pop)",
+                            backdropFilter: "blur(14px)",
+                        }}
                     >
+                        <div className="absolute inset-x-0 top-0 h-px" style={{ background: "var(--zc-hairline)" }} />
                         <motion.div
                             animate={{ rotate: 360 }}
                             transition={{ repeat: Infinity, duration: 2.4, ease: "linear" }}

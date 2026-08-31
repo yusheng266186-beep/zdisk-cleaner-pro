@@ -1,6 +1,6 @@
-/* 设计令牌 v2 —— 「深空驾驶舱」
-   在 v1 基础上补齐：半径 / 阴影 / 层级 / 焦点环 / 双主题切换。
-   组件内禁止硬编码色值，一律取变量。 */
+/* 设计令牌 v3 —— 「深空驾驶舱 · 精装版」
+   v2 基础上：氛围光背景 / 品牌渐变令牌 / 三档海拔 / 光泽与微光 utilities /
+   主题切换过渡 / 滚动条 hover 态。组件内禁止硬编码色值，一律取变量。 */
 @import "tailwindcss";
 
 :root {
@@ -34,9 +34,16 @@
   --zc-r-lg: 16px;
   --zc-r-full: 999px;
 
-  /* 阴影 */
-  --zc-shadow-panel: 0 12px 40px -12px rgba(0, 0, 0, 0.55);
-  --zc-shadow-pop: 0 24px 80px -20px rgba(0, 0, 0, 0.7);
+  /* 海拔三档 + 兼容别名 */
+  --zc-shadow-1: 0 1px 2px rgba(0, 0, 0, 0.24), 0 4px 12px -4px rgba(0, 0, 0, 0.28);
+  --zc-shadow-2: 0 8px 28px -10px rgba(0, 0, 0, 0.42);
+  --zc-shadow-3: 0 24px 80px -20px rgba(0, 0, 0, 0.7);
+  --zc-shadow-panel: var(--zc-shadow-2);
+  --zc-shadow-pop: var(--zc-shadow-3);
+
+  /* 品牌渐变与发丝线 */
+  --zc-grad-brand: linear-gradient(135deg, var(--zc-accent-a), var(--zc-accent-b));
+  --zc-hairline: linear-gradient(90deg, transparent, color-mix(in srgb, var(--zc-accent-b) 55%, transparent), transparent);
 
   /* 动效规格（统一出口） */
   --zc-dur-micro: 140ms;
@@ -76,7 +83,13 @@ body,
 }
 
 body {
-  background: var(--zc-bg);
+  /* 氛围光:右上角一抹品牌色晕,给深空背景加纵深 */
+  background:
+    radial-gradient(1100px 520px at 78% -8%,
+      color-mix(in srgb, var(--zc-accent-a) 9%, transparent), transparent 70%),
+    radial-gradient(900px 420px at -10% 108%,
+      color-mix(in srgb, var(--zc-accent-b) 6%, transparent), transparent 70%),
+    var(--zc-bg);
   color: var(--zc-text-1);
   font-family:
     MiSans,
@@ -94,6 +107,19 @@ textarea {
   user-select: text;
 }
 
+button:not(:disabled) {
+  cursor: pointer;
+}
+
+/* 主题切换时表面与文字柔和过渡(不动布局属性,不影响动效系统) */
+body,
+aside,
+main {
+  transition:
+    background-color 260ms var(--zc-ease-standard),
+    color 260ms var(--zc-ease-standard);
+}
+
 ::selection {
   background: color-mix(in srgb, var(--zc-accent-a) 45%, transparent);
 }
@@ -108,8 +134,11 @@ textarea {
   height: 8px;
 }
 *::-webkit-scrollbar-thumb {
-  background: var(--zc-surface-3);
+  background: color-mix(in srgb, var(--zc-text-3) 32%, transparent);
   border-radius: var(--zc-r-full);
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--zc-text-3) 52%, transparent);
 }
 
 /* 可聚焦元素的键盘焦点环 */
@@ -122,4 +151,66 @@ textarea {
 /* 数字统一等宽防抖 */
 .num {
   font-variant-numeric: tabular-nums;
+}
+
+
+/* ── 精装 utilities ────────────────────────────────────── */
+
+/* 主按钮光泽:悬停时一道高光自左向右扫过(需元素 position:relative + overflow:hidden) */
+.zc-sheen {
+  position: relative;
+  overflow: hidden;
+}
+.zc-sheen::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    115deg,
+    transparent 30%,
+    rgb(255 255 255 / 0.22) 48%,
+    transparent 62%
+  );
+  transform: translateX(-120%);
+  transition: transform 620ms var(--zc-ease-standard);
+  pointer-events: none;
+}
+.zc-sheen:hover::after {
+  transform: translateX(120%);
+}
+
+/* 骨架微光:替代 animate-pulse 的一道横向流光 */
+.zc-shimmer {
+  position: relative;
+  overflow: hidden;
+  background: var(--zc-surface-3);
+}
+.zc-shimmer::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    color-mix(in srgb, var(--zc-text-1) 7%, transparent),
+    transparent
+  );
+  animation: zc-shimmer 1.6s var(--zc-ease-standard) infinite;
+}
+@keyframes zc-shimmer {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(100%); }
+}
+
+/* 交互卡片悬浮:轻抬 + 品牌发丝描边 */
+.zc-lift {
+  transition:
+    transform 220ms var(--zc-ease-standard),
+    border-color 220ms var(--zc-ease-standard),
+    box-shadow 220ms var(--zc-ease-standard);
+}
+.zc-lift:hover {
+  transform: translateY(-2px);
+  border-color: color-mix(in srgb, var(--zc-accent-b) 40%, var(--zc-border));
+  box-shadow: var(--zc-shadow-2);
 }

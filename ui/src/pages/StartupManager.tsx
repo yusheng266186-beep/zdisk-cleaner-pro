@@ -167,10 +167,10 @@ function Skeleton() {
                     className="grid grid-cols-[92px_minmax(0,130px)_minmax(0,1fr)_64px] items-center gap-3 border-b px-4 py-3.5 last:border-b-0"
                     style={{ borderColor: "var(--zc-border)" }}
                 >
-                    <div className="h-3 animate-pulse rounded" style={{ background: "var(--zc-surface-3)", width: 56 }} />
-                    <div className="h-3 animate-pulse rounded" style={{ background: "var(--zc-surface-3)" }} />
-                    <div className="h-3 flex-1 animate-pulse rounded" style={{ background: "var(--zc-surface-3)" }} />
-                    <div className="ml-auto h-6 w-12 animate-pulse rounded-lg" style={{ background: "var(--zc-surface-3)" }} />
+                    <div className="h-3 zc-shimmer rounded" style={{ background: "var(--zc-surface-3)", width: 56 }} />
+                    <div className="h-3 zc-shimmer rounded"  />
+                    <div className="h-3 flex-1 zc-shimmer rounded"  />
+                    <div className="ml-auto h-6 w-12 zc-shimmer rounded-lg"  />
                 </div>
             ))}
         </div>

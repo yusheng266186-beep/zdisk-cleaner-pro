@@ -114,8 +114,8 @@ export function Duplicates() {
                 <button
                     onClick={() => void hunt()}
                     disabled={hunting}
-                    className="flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-transform active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
-                    style={{ background: "linear-gradient(135deg,var(--zc-accent-a),var(--zc-accent-b))", color: "#ffffff" }}
+                    className="zc-sheen flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-transform active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
+                    style={{ background: "var(--zc-grad-brand)", color: "#ffffff", boxShadow: "0 8px 22px -8px color-mix(in srgb, var(--zc-accent-a) 60%, transparent), inset 0 1px 0 rgb(255 255 255 / .3)" }}
                 >
                     <Fingerprint size={14} /> {hunting ? "猎取中…" : "猎取重复"}
                 </button>
@@ -292,7 +292,7 @@ function Skeleton() {
             {[3, 2, 4].map((rows, gi) => (
                 <div
                     key={gi}
-                    className="animate-pulse rounded-xl border p-4"
+                    className="zc-shimmer rounded-xl border p-4"
                     style={{ background: "var(--zc-surface-1)", borderColor: "var(--zc-border)" }}
                 >
                     <div className="h-4 w-40" style={blockStyle} />

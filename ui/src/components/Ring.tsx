@@ -32,20 +32,27 @@ export function Ring({
         return () => controls.stop();
     }, [pct, mv]);
 
+    const gid = `ring-grad-${Math.round(size)}-${stroke}`;
     return (
         <div className="relative grid place-items-center" style={{ width: size, height: size }}>
             <svg width={size} height={size} className="-rotate-90">
+                <defs>
+                    <linearGradient id={gid} x1="0%" y1="0%" x2="100%" y2="100%">
+                        <stop offset="0%" stopColor="var(--zc-accent-a)" />
+                        <stop offset="100%" stopColor="var(--zc-accent-b)" />
+                    </linearGradient>
+                </defs>
                 <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke={track} strokeWidth={stroke} />
                 <motion.circle
                     cx={size / 2}
                     cy={size / 2}
                     r={r}
                     fill="none"
-                    stroke={color}
+                    stroke={color === "var(--zc-accent-a)" ? `url(#${gid})` : color}
                     strokeWidth={stroke}
                     strokeLinecap="round"
                     strokeDasharray={c}
-                    style={{ strokeDashoffset: offset }}
+                    style={{ strokeDashoffset: offset, filter: "drop-shadow(0 0 6px color-mix(in srgb, var(--zc-accent-b) 35%, transparent))" }}
                 />
             </svg>
             <div className="absolute inset-0 grid place-items-center">{children}</div>

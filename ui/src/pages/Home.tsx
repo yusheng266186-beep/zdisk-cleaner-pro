@@ -28,12 +28,14 @@ export function Home() {
                     <motion.div
                         initial={{ opacity: 0, y: -14 }}
                         animate={{ opacity: 1, y: 0, transition: springSnappy }}
-                        className="mb-6 flex items-center justify-between rounded-xl border px-4 py-3"
+                        className="relative mb-6 flex items-center justify-between overflow-hidden rounded-xl border px-4 py-3"
                         style={{
                             background: "color-mix(in srgb, var(--zc-ok) 10%, var(--zc-surface-1))",
                             borderColor: "color-mix(in srgb, var(--zc-ok) 30%, transparent)",
+                            boxShadow: "var(--zc-shadow-1)",
                         }}
                     >
+                        <span className="absolute inset-y-0 left-0 w-[3px]" style={{ background: "var(--zc-ok)" }} />
                         <div className="flex items-center gap-2 text-sm">
                             <ShieldCheck size={16} style={{ color: "var(--zc-ok)" }} />
                             <span>
@@ -88,11 +90,11 @@ export function Home() {
                         whileHover={{ y: -2 }}
                         whileTap={{ scale: 0.97 }}
                         transition={springSnappy}
-                        className="mt-7 flex items-center gap-2 rounded-full px-9 py-3.5 text-base font-medium text-white"
+                        className="zc-sheen mt-7 flex items-center gap-2 rounded-full px-9 py-3.5 text-base font-medium text-white"
                         style={{
-                            background:
-                                "linear-gradient(135deg, var(--zc-accent-a), var(--zc-accent-b))",
-                            boxShadow: "0 10px 30px -8px color-mix(in srgb, var(--zc-accent-a) 65%, transparent)",
+                            background: "var(--zc-grad-brand)",
+                            boxShadow:
+                                "0 12px 34px -8px color-mix(in srgb, var(--zc-accent-a) 70%, transparent), inset 0 1px 0 rgb(255 255 255 / .35)",
                         }}
                     >
                         <Sparkles size={18} />
