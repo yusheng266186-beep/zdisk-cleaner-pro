@@ -16,6 +16,25 @@
 
 ---
 
+<!-- project-navigation:start -->
+## 项目概览
+
+| 项目 | 说明 |
+| --- | --- |
+| 分类 | 桌面效率工具 |
+| 平台 | Windows / Rust / Tauri |
+| 当前定位 | 已发布桌面工具 |
+
+提供垃圾扫描、空间管理、程序搬家和清理恢复的 Windows 磁盘管理工具。
+
+[版本与下载](https://github.com/yusheng266186-beep/zdisk-cleaner-pro/releases) · [使用与开发](#快速开始) · [项目总导航](https://github.com/yusheng266186-beep/yusheng266186-beep)
+
+下载安装先看「快速开始」；清理保护、恢复和更新机制见「安全与隐私」及规则手册。
+
+**阅读导航：** [快速开始](#快速开始) · [安全与隐私](#安全与隐私) · [版本史](#版本史) · [架构](#架构)
+
+<!-- project-navigation:end -->
+
 ## 为什么是它
 
 | | |
