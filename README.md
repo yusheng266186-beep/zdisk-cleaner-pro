@@ -2,6 +2,8 @@
 
 # ZDiskCleaner Pro
 
+[English guide](README.en.md)
+
 **Rust 内核的安全空间管理站 · v5.0.0**
 
 [![Release](https://img.shields.io/badge/release-v5.0.0-blue)](https://github.com/yusheng266186-beep/zdisk-cleaner-pro/releases/tag/v5.0.0)
